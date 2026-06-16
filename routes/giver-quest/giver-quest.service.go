@@ -51,6 +51,7 @@ type questRecord struct {
 	CurrentRunnerCount string
 	StartsAt           *time.Time
 	EndsAt             *time.Time
+	PublishedAt        *time.Time
 	CreatedAt          *time.Time
 	UpdatedAt          *time.Time
 }
@@ -72,6 +73,31 @@ type escrowRecord struct {
 	RefundedAt        *time.Time
 	CreatedAt         *time.Time
 	UpdatedAt         *time.Time
+}
+
+type questAssignmentRatingRecord struct {
+	ID               string
+	AssignmentStatus string
+}
+
+type ratingStateRecord struct {
+	RatingCount       int
+	UniqueRatingCount int
+	GiverRated        bool
+	RunnerRated       bool
+	ViewerHasRated    bool
+	BothRated         bool
+}
+
+type questRatingStateRecord struct {
+	RatingCount          int
+	UniqueRatingCount    int
+	AssignmentsTotal     int
+	AssignmentsBothRated int
+	GiverRated           bool
+	RunnerRated          bool
+	ViewerHasRated       bool
+	BothRated            bool
 }
 
 type createQuestPayload struct {
@@ -145,7 +171,7 @@ func (s *Service) FindQuestByID(ctx context.Context, questID string) (*questReco
 	row, err := s.client.SelectFirst(
 		ctx,
 		"quests",
-		"id,giver_auth_user_id,title,description,category,skill_tags,mode,status,reward_amount,reward_currency,province,city,district,sub_district,full_address,postal_code,lat,lng,max_runner,current_runner_count,starts_at,ends_at,created_at,updated_at",
+		"id,giver_auth_user_id,title,description,category,skill_tags,mode,status,reward_amount,reward_currency,province,city,district,sub_district,full_address,postal_code,lat,lng,max_runner,current_runner_count,starts_at,ends_at,published_at,created_at,updated_at",
 		map[string]string{"id": questID},
 	)
 	if err != nil {
@@ -215,11 +241,56 @@ func (s *Service) CreateQuestDraft(ctx context.Context, authRecord *authSessionR
 	return questID, nil
 }
 
+func (s *Service) UpdateQuestDraft(ctx context.Context, questID string, payload createQuestPayload) error {
+	now := time.Now().UTC()
+	updatePayload := map[string]any{
+		"title":           payload.Title,
+		"description":     payload.Description,
+		"category":        nullIfEmpty(payload.Category),
+		"skill_tags":      payload.SkillTags,
+		"mode":            payload.Mode,
+		"reward_amount":   payload.RewardAmount,
+		"reward_currency": firstNonEmpty(payload.RewardCurrency, "IDR"),
+		"province":        nullIfEmpty(payload.Province),
+		"city":            nullIfEmpty(payload.City),
+		"district":        nullIfEmpty(payload.District),
+		"sub_district":    nullIfEmpty(payload.SubDistrict),
+		"full_address":    nullIfEmpty(payload.FullAddress),
+		"postal_code":     nullIfEmpty(payload.PostalCode),
+		"lat":             optionalFloat64Value(payload.Lat),
+		"lng":             optionalFloat64Value(payload.Lng),
+		"max_runner":      payload.MaxRunner,
+		"starts_at":       optionalTimeValue(payload.StartsAt),
+		"ends_at":         optionalTimeValue(payload.EndsAt),
+		"updated_at":      now,
+	}
+
+	if err := s.client.Update(ctx, "quests", map[string]string{"id": questID}, updatePayload); err != nil {
+		return err
+	}
+
+	rewardAmount := roundCurrency(payload.RewardAmount * float64(payload.MaxRunner))
+	platformFeeAmount := roundCurrency(rewardAmount * float64(platformFeePercent) / 100)
+	totalAmount := roundCurrency(rewardAmount + platformFeeAmount)
+	return s.client.Update(ctx, "quest_escrows", map[string]string{
+		"quest_id": questID,
+	}, map[string]any{
+		"reward_amount":       rewardAmount,
+		"platform_fee_amount": platformFeeAmount,
+		"total_amount":        totalAmount,
+		"updated_at":          now,
+	})
+}
+
+func (s *Service) DeleteQuestDraft(ctx context.Context, questID string) error {
+	return s.client.Delete(ctx, "quests", map[string]string{"id": questID})
+}
+
 func (s *Service) ListGiverQuests(ctx context.Context, authUserID string) ([]questRecord, error) {
 	rows, err := s.client.SelectMany(
 		ctx,
 		"quests",
-		"id,giver_auth_user_id,title,description,category,skill_tags,mode,status,reward_amount,reward_currency,province,city,district,sub_district,full_address,postal_code,lat,lng,max_runner,current_runner_count,starts_at,ends_at,created_at,updated_at",
+		"id,giver_auth_user_id,title,description,category,skill_tags,mode,status,reward_amount,reward_currency,province,city,district,sub_district,full_address,postal_code,lat,lng,max_runner,current_runner_count,starts_at,ends_at,published_at,created_at,updated_at",
 		map[string]string{"giver_auth_user_id": authUserID},
 		&config.SelectOptions{OrderBy: "created_at", Desc: true, Limit: 100},
 	)
@@ -249,6 +320,62 @@ func (s *Service) FindQuestEscrowByQuestID(ctx context.Context, questID string) 
 	}
 	record := mapEscrowRecord(row)
 	return &record, nil
+}
+
+func (s *Service) ListQuestAssignmentsForRating(ctx context.Context, questID string) ([]questAssignmentRatingRecord, error) {
+	rows, err := s.client.SelectMany(
+		ctx,
+		"quest_assignments",
+		"id,assignment_status",
+		map[string]string{"quest_id": questID},
+		&config.SelectOptions{OrderBy: "created_at", Desc: true, Limit: 100},
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	items := make([]questAssignmentRatingRecord, 0, len(rows))
+	for _, row := range rows {
+		items = append(items, questAssignmentRatingRecord{
+			ID:               config.NormalizeString(row["id"]),
+			AssignmentStatus: config.NormalizeString(row["assignment_status"]),
+		})
+	}
+	return items, nil
+}
+
+func (s *Service) FindRatingStateByAssignment(ctx context.Context, assignmentID string, viewerAuthUserID string) (*ratingStateRecord, error) {
+	rows, err := s.client.SelectMany(ctx, "quest_ratings", "rater_auth_user_id,rater_role", map[string]string{
+		"assignment_id": assignmentID,
+	}, &config.SelectOptions{Limit: 10})
+	if err != nil {
+		return nil, err
+	}
+
+	uniqueRaters := map[string]bool{}
+	state := &ratingStateRecord{
+		RatingCount: len(rows),
+	}
+	for _, row := range rows {
+		raterID := config.NormalizeString(row["rater_auth_user_id"])
+		if raterID != "" {
+			uniqueRaters[raterID] = true
+		}
+		if raterID == viewerAuthUserID {
+			state.ViewerHasRated = true
+		}
+
+		switch strings.ToLower(strings.TrimSpace(config.NormalizeString(row["rater_role"]))) {
+		case "giver":
+			state.GiverRated = true
+		case "runner":
+			state.RunnerRated = true
+		}
+	}
+
+	state.UniqueRatingCount = len(uniqueRaters)
+	state.BothRated = state.GiverRated && state.RunnerRated && state.UniqueRatingCount >= 2
+	return state, nil
 }
 
 func (s *Service) UpdateQuestEscrowLock(ctx context.Context, questID string, paymentMethod string) error {
@@ -314,6 +441,7 @@ func mapQuestRecord(row map[string]any) questRecord {
 		CurrentRunnerCount: config.NormalizeString(row["current_runner_count"]),
 		StartsAt:           parseOptionalTime(row["starts_at"]),
 		EndsAt:             parseOptionalTime(row["ends_at"]),
+		PublishedAt:        parseOptionalTime(row["published_at"]),
 		CreatedAt:          parseOptionalTime(row["created_at"]),
 		UpdatedAt:          parseOptionalTime(row["updated_at"]),
 	}

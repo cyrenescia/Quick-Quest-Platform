@@ -24,11 +24,21 @@ type authSessionRecord struct {
 }
 
 type questRecord struct {
-	ID              string
-	GiverAuthUserID string
-	Title           string
-	Status          string
-	Mode            string
+	ID                 string
+	GiverAuthUserID    string
+	Title              string
+	Status             string
+	Mode               string
+	Province           string
+	City               string
+	District           string
+	SubDistrict        string
+	FullAddress        string
+	PostalCode         string
+	Lat                string
+	Lng                string
+	MaxRunner          string
+	CurrentRunnerCount string
 }
 
 type questAssignmentRecord struct {
@@ -39,6 +49,8 @@ type questAssignmentRecord struct {
 	JoinedAt         *time.Time
 	StartedAt        *time.Time
 	FinishedAt       *time.Time
+	WorkLocation     map[string]any
+	LocationSharedAt *time.Time
 	CreatedAt        *time.Time
 	UpdatedAt        *time.Time
 }
@@ -55,6 +67,15 @@ type runnerSummaryRecord struct {
 	Username   string
 	Email      string
 	Phone      string
+}
+
+type ratingStateRecord struct {
+	RatingCount       int
+	UniqueRatingCount int
+	GiverRated        bool
+	RunnerRated       bool
+	ViewerHasRated    bool
+	BothRated         bool
 }
 
 func NewService(client *config.SupabaseClient, cfg config.AppConfig) *Service {
@@ -84,7 +105,7 @@ func (s *Service) FindAuthBySessionToken(ctx context.Context, token string) (*au
 }
 
 func (s *Service) FindQuestByID(ctx context.Context, questID string) (*questRecord, error) {
-	row, err := s.client.SelectFirst(ctx, "quests", "id,giver_auth_user_id,title,status,mode", map[string]string{
+	row, err := s.client.SelectFirst(ctx, "quests", "id,giver_auth_user_id,title,status,mode,province,city,district,sub_district,full_address,postal_code,lat,lng,max_runner,current_runner_count", map[string]string{
 		"id": questID,
 	})
 	if err != nil {
@@ -95,11 +116,21 @@ func (s *Service) FindQuestByID(ctx context.Context, questID string) (*questReco
 	}
 
 	return &questRecord{
-		ID:              config.NormalizeString(row["id"]),
-		GiverAuthUserID: config.NormalizeString(row["giver_auth_user_id"]),
-		Title:           config.NormalizeString(row["title"]),
-		Status:          config.NormalizeString(row["status"]),
-		Mode:            config.NormalizeString(row["mode"]),
+		ID:                 config.NormalizeString(row["id"]),
+		GiverAuthUserID:    config.NormalizeString(row["giver_auth_user_id"]),
+		Title:              config.NormalizeString(row["title"]),
+		Status:             config.NormalizeString(row["status"]),
+		Mode:               config.NormalizeString(row["mode"]),
+		Province:           config.NormalizeString(row["province"]),
+		City:               config.NormalizeString(row["city"]),
+		District:           config.NormalizeString(row["district"]),
+		SubDistrict:        config.NormalizeString(row["sub_district"]),
+		FullAddress:        config.NormalizeString(row["full_address"]),
+		PostalCode:         config.NormalizeString(row["postal_code"]),
+		Lat:                config.NormalizeString(row["lat"]),
+		Lng:                config.NormalizeString(row["lng"]),
+		MaxRunner:          config.NormalizeString(row["max_runner"]),
+		CurrentRunnerCount: config.NormalizeString(row["current_runner_count"]),
 	}, nil
 }
 
@@ -107,7 +138,7 @@ func (s *Service) FindQuestAssignmentByID(ctx context.Context, assignmentID stri
 	row, err := s.client.SelectFirst(
 		ctx,
 		"quest_assignments",
-		"id,quest_id,runner_auth_user_id,assignment_status,joined_at,started_at,finished_at,created_at,updated_at",
+		"id,quest_id,runner_auth_user_id,assignment_status,joined_at,started_at,finished_at,work_location,location_shared_at,created_at,updated_at",
 		map[string]string{"id": assignmentID},
 	)
 	if err != nil {
@@ -124,7 +155,7 @@ func (s *Service) ListQuestAssignments(ctx context.Context, questID string) ([]q
 	rows, err := s.client.SelectMany(
 		ctx,
 		"quest_assignments",
-		"id,quest_id,runner_auth_user_id,assignment_status,joined_at,started_at,finished_at,created_at,updated_at",
+		"id,quest_id,runner_auth_user_id,assignment_status,joined_at,started_at,finished_at,work_location,location_shared_at,created_at,updated_at",
 		map[string]string{"quest_id": questID},
 		&config.SelectOptions{OrderBy: "created_at", Desc: true, Limit: 100},
 	)
@@ -159,6 +190,40 @@ func (s *Service) FindRunnerSummary(ctx context.Context, authUserID string) (*ru
 	}, nil
 }
 
+func (s *Service) FindRatingStateByAssignment(ctx context.Context, assignmentID string, viewerAuthUserID string) (*ratingStateRecord, error) {
+	rows, err := s.client.SelectMany(ctx, "quest_ratings", "rater_auth_user_id,rater_role", map[string]string{
+		"assignment_id": assignmentID,
+	}, &config.SelectOptions{Limit: 10})
+	if err != nil {
+		return nil, err
+	}
+
+	uniqueRaters := map[string]bool{}
+	state := &ratingStateRecord{
+		RatingCount: len(rows),
+	}
+	for _, row := range rows {
+		raterID := config.NormalizeString(row["rater_auth_user_id"])
+		if raterID != "" {
+			uniqueRaters[raterID] = true
+		}
+		if raterID == viewerAuthUserID {
+			state.ViewerHasRated = true
+		}
+
+		switch strings.ToLower(strings.TrimSpace(config.NormalizeString(row["rater_role"]))) {
+		case "giver":
+			state.GiverRated = true
+		case "runner":
+			state.RunnerRated = true
+		}
+	}
+
+	state.UniqueRatingCount = len(uniqueRaters)
+	state.BothRated = state.GiverRated && state.RunnerRated && state.UniqueRatingCount >= 2
+	return state, nil
+}
+
 func (s *Service) UpdateQuestAssignmentAudit(ctx context.Context, assignmentID string, nextStatus string) error {
 	return s.client.Update(ctx, "quest_assignments", map[string]string{
 		"id": assignmentID,
@@ -166,6 +231,57 @@ func (s *Service) UpdateQuestAssignmentAudit(ctx context.Context, assignmentID s
 		"assignment_status": nextStatus,
 		"updated_at":        time.Now().UTC(),
 	})
+}
+
+func (s *Service) UpdateQuestAssignmentCandidate(ctx context.Context, assignmentID string, nextStatus string) error {
+	return s.client.Update(ctx, "quest_assignments", map[string]string{
+		"id": assignmentID,
+	}, map[string]any{
+		"assignment_status": nextStatus,
+		"updated_at":        time.Now().UTC(),
+	})
+}
+
+func (s *Service) ShareQuestAssignmentLocation(ctx context.Context, assignmentID string, workLocation map[string]any, sharedAt time.Time) error {
+	return s.client.Update(ctx, "quest_assignments", map[string]string{
+		"id": assignmentID,
+	}, map[string]any{
+		"work_location":      workLocation,
+		"location_shared_at": sharedAt,
+		"updated_at":         sharedAt,
+	})
+}
+
+func (s *Service) UpdateQuestAfterCandidateConfirm(ctx context.Context, questID string, nextStatus string, nextRunnerCount int) error {
+	return s.client.Update(ctx, "quests", map[string]string{
+		"id": questID,
+	}, map[string]any{
+		"status":               nextStatus,
+		"current_runner_count": nextRunnerCount,
+		"updated_at":           time.Now().UTC(),
+	})
+}
+
+func (s *Service) CancelOtherPendingAssignments(ctx context.Context, questID string, selectedAssignmentID string) (int, error) {
+	assignments, err := s.ListQuestAssignments(ctx, questID)
+	if err != nil {
+		return 0, err
+	}
+
+	cancelled := 0
+	for _, assignment := range assignments {
+		if assignment.ID == selectedAssignmentID {
+			continue
+		}
+		if !strings.EqualFold(assignment.AssignmentStatus, "pending") {
+			continue
+		}
+		if err := s.UpdateQuestAssignmentCandidate(ctx, assignment.ID, "cancelled"); err != nil {
+			return cancelled, err
+		}
+		cancelled++
+	}
+	return cancelled, nil
 }
 
 func (s *Service) UpdateQuestAfterAudit(ctx context.Context, questID string, nextStatus string) error {
@@ -262,8 +378,31 @@ func mapQuestAssignmentRecord(row map[string]any) questAssignmentRecord {
 		JoinedAt:         parseOptionalTime(row["joined_at"]),
 		StartedAt:        parseOptionalTime(row["started_at"]),
 		FinishedAt:       parseOptionalTime(row["finished_at"]),
+		WorkLocation:     parseWorkLocation(row["work_location"]),
+		LocationSharedAt: parseOptionalTime(row["location_shared_at"]),
 		CreatedAt:        parseOptionalTime(row["created_at"]),
 		UpdatedAt:        parseOptionalTime(row["updated_at"]),
+	}
+}
+
+func parseWorkLocation(value any) map[string]any {
+	switch typed := value.(type) {
+	case nil:
+		return nil
+	case map[string]any:
+		return typed
+	case string:
+		trimmed := strings.TrimSpace(typed)
+		if trimmed == "" {
+			return nil
+		}
+		out := map[string]any{}
+		if err := json.Unmarshal([]byte(trimmed), &out); err == nil {
+			return out
+		}
+		return nil
+	default:
+		return nil
 	}
 }
 

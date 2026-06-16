@@ -21,6 +21,10 @@ func GiverQuest(service *Service) fiber.Handler {
 			return handleGiverQuestGet(c, service)
 		case fiber.MethodPost:
 			return handleGiverQuestPost(c, service)
+		case fiber.MethodPut:
+			return handleGiverQuestPut(c, service)
+		case fiber.MethodDelete:
+			return handleGiverQuestDelete(c, service)
 		case fiber.MethodOptions:
 			return c.SendStatus(fiber.StatusNoContent)
 		default:
@@ -30,6 +34,10 @@ func GiverQuest(service *Service) fiber.Handler {
 }
 
 func handleGiverQuestGet(c fiber.Ctx, service *Service) error {
+	if strings.HasSuffix(c.Path(), "/history") {
+		return handleGiverQuestHistoryGet(c, service)
+	}
+
 	ctx, cancel, authRecord, roleRecord, err := resolveGiverQuestContext(c, service, false)
 	if err != nil {
 		return config.WriteError(c, err, "Gagal mengambil quest giver.")
@@ -48,30 +56,62 @@ func handleGiverQuestGet(c fiber.Ctx, service *Service) error {
 			return config.WriteError(c, config.MapSupabaseError(err, "Gagal mengambil escrow quest cloud."), "Gagal mengambil quest giver.")
 		}
 
-		items = append(items, fiber.Map{
-			"id":                   record.ID,
-			"title":                record.Title,
-			"description":          record.Description,
-			"category":             record.Category,
-			"skill_tags":           record.SkillTags,
-			"mode":                 record.Mode,
-			"status":               record.Status,
-			"reward_amount":        record.RewardAmount,
-			"reward_currency":      firstNonEmpty(record.RewardCurrency, "IDR"),
-			"reward_display":       buildRewardDisplay(record.RewardAmount, record.RewardCurrency),
-			"current_runner_count": parseOptionalInt(record.CurrentRunnerCount),
-			"max_runner":           parseOptionalInt(record.MaxRunner),
-			"city":                 record.City,
-			"district":             record.District,
-			"full_address":         record.FullAddress,
-			"created_at":           optionalTimeValue(record.CreatedAt),
-			"escrow":               toQuestEscrowPayload(escrow),
-		})
+		ratingState, err := buildQuestRatingState(ctx, service, record.ID, authRecord.AuthUserID)
+		if err != nil {
+			return config.WriteError(c, config.MapSupabaseError(err, "Gagal mengambil rating state quest cloud."), "Gagal mengambil quest giver.")
+		}
+		if isGiverClosedQuest(&record, escrow, ratingState) {
+			continue
+		}
+
+		items = append(items, toGiverQuestPayload(&record, escrow, ratingState))
 	}
 
 	return c.JSON(fiber.Map{
 		"success": true,
 		"message": "Quest giver berhasil diambil.",
+		"data": fiber.Map{
+			"giver_auth_user_id": authRecord.AuthUserID,
+			"user_role":          roleRecord.UserRole,
+			"items":              items,
+			"total":              len(items),
+		},
+	})
+}
+
+func handleGiverQuestHistoryGet(c fiber.Ctx, service *Service) error {
+	ctx, cancel, authRecord, roleRecord, err := resolveGiverQuestContext(c, service, false)
+	if err != nil {
+		return config.WriteError(c, err, "Gagal mengambil riwayat quest giver.")
+	}
+	defer cancel()
+
+	quests, err := service.ListGiverQuests(ctx, authRecord.AuthUserID)
+	if err != nil {
+		return config.WriteError(c, config.MapSupabaseError(err, "Gagal mengambil quest giver cloud."), "Gagal mengambil riwayat quest giver.")
+	}
+
+	items := make([]fiber.Map, 0)
+	for _, record := range quests {
+		escrow, err := service.FindQuestEscrowByQuestID(ctx, record.ID)
+		if err != nil {
+			return config.WriteError(c, config.MapSupabaseError(err, "Gagal mengambil escrow riwayat quest cloud."), "Gagal mengambil riwayat quest giver.")
+		}
+
+		ratingState, err := buildQuestRatingState(ctx, service, record.ID, authRecord.AuthUserID)
+		if err != nil {
+			return config.WriteError(c, config.MapSupabaseError(err, "Gagal mengambil rating state riwayat quest cloud."), "Gagal mengambil riwayat quest giver.")
+		}
+		if !isGiverHistoryQuest(&record, escrow, ratingState) {
+			continue
+		}
+
+		items = append(items, toGiverQuestPayload(&record, escrow, ratingState))
+	}
+
+	return c.JSON(fiber.Map{
+		"success": true,
+		"message": "Riwayat quest giver berhasil diambil.",
 		"data": fiber.Map{
 			"giver_auth_user_id": authRecord.AuthUserID,
 			"user_role":          roleRecord.UserRole,
@@ -111,19 +151,15 @@ func handleGiverQuestPost(c fiber.Ctx, service *Service) error {
 			return config.WriteError(c, config.MapSupabaseError(err, "Gagal mengambil escrow quest cloud."), "Gagal membuat draft quest giver.")
 		}
 
+		createdQuest, err := service.FindQuestByID(ctx, questID)
+		if err != nil {
+			return config.WriteError(c, config.MapSupabaseError(err, "Gagal mengambil draft quest cloud."), "Gagal membuat draft quest giver.")
+		}
+
 		return c.Status(fiber.StatusCreated).JSON(fiber.Map{
 			"success": true,
 			"message": "Draft quest giver berhasil dibuat.",
-			"data": fiber.Map{
-				"quest_id":        questID,
-				"title":           payload.Title,
-				"mode":            payload.Mode,
-				"status":          "draft",
-				"reward_amount":   payload.RewardAmount,
-				"reward_currency": firstNonEmpty(payload.RewardCurrency, "IDR"),
-				"max_runner":      payload.MaxRunner,
-				"escrow":          toQuestEscrowPayload(escrow),
-			},
+			"data":    toGiverQuestPayload(createdQuest, escrow, nil),
 		})
 	case "lock":
 		questID := strings.TrimSpace(c.Params("id"))
@@ -221,6 +257,102 @@ func handleGiverQuestPost(c fiber.Ctx, service *Service) error {
 	default:
 		return config.WriteError(c, config.NewAppError("Aksi giver quest tidak dikenal.", fiber.StatusNotFound), "Gagal memproses giver quest.")
 	}
+}
+
+func handleGiverQuestPut(c fiber.Ctx, service *Service) error {
+	body, err := config.ParseJSONBody(c)
+	if err != nil {
+		return config.WriteError(c, err, "Gagal update draft quest giver.")
+	}
+
+	ctx, cancel, authRecord, _, err := resolveGiverQuestContext(c, service, true)
+	if err != nil {
+		return config.WriteError(c, err, "Gagal update draft quest giver.")
+	}
+	defer cancel()
+
+	questID := strings.TrimSpace(c.Params("id"))
+	if questID == "" {
+		return config.WriteError(c, config.NewAppError("Quest ID wajib dikirim untuk update draft.", fiber.StatusBadRequest), "Gagal update draft quest giver.")
+	}
+
+	questRecord, err := service.FindQuestByID(ctx, questID)
+	if err != nil {
+		return config.WriteError(c, config.MapSupabaseError(err, "Gagal mengambil quest giver cloud."), "Gagal update draft quest giver.")
+	}
+	if questRecord == nil {
+		return config.WriteError(c, config.NewAppError("Quest tidak ditemukan.", fiber.StatusNotFound), "Gagal update draft quest giver.")
+	}
+	if questRecord.GiverAuthUserID != authRecord.AuthUserID {
+		return config.WriteError(c, config.NewAppError("Draft ini bukan milik giver login.", fiber.StatusForbidden), "Gagal update draft quest giver.")
+	}
+	if questRecord.Status != "draft" {
+		return config.WriteError(c, config.NewAppError("Quest yang sudah publish tidak bisa diedit lewat draft.", fiber.StatusConflict), "Gagal update draft quest giver.")
+	}
+
+	payload, err := collectCreateQuestRequest(body)
+	if err != nil {
+		return config.WriteError(c, err, "Gagal update draft quest giver.")
+	}
+
+	if err := service.UpdateQuestDraft(ctx, questID, payload); err != nil {
+		return config.WriteError(c, config.MapSupabaseError(err, "Gagal update draft quest giver cloud."), "Gagal update draft quest giver.")
+	}
+
+	updatedQuest, err := service.FindQuestByID(ctx, questID)
+	if err != nil {
+		return config.WriteError(c, config.MapSupabaseError(err, "Gagal mengambil draft quest cloud."), "Gagal update draft quest giver.")
+	}
+	updatedEscrow, err := service.FindQuestEscrowByQuestID(ctx, questID)
+	if err != nil {
+		return config.WriteError(c, config.MapSupabaseError(err, "Gagal mengambil escrow draft cloud."), "Gagal update draft quest giver.")
+	}
+
+	return c.JSON(fiber.Map{
+		"success": true,
+		"message": "Draft quest giver berhasil diperbarui.",
+		"data":    toGiverQuestPayload(updatedQuest, updatedEscrow, nil),
+	})
+}
+
+func handleGiverQuestDelete(c fiber.Ctx, service *Service) error {
+	ctx, cancel, authRecord, _, err := resolveGiverQuestContext(c, service, true)
+	if err != nil {
+		return config.WriteError(c, err, "Gagal hapus draft quest giver.")
+	}
+	defer cancel()
+
+	questID := strings.TrimSpace(c.Params("id"))
+	if questID == "" {
+		return config.WriteError(c, config.NewAppError("Quest ID wajib dikirim untuk hapus draft.", fiber.StatusBadRequest), "Gagal hapus draft quest giver.")
+	}
+
+	questRecord, err := service.FindQuestByID(ctx, questID)
+	if err != nil {
+		return config.WriteError(c, config.MapSupabaseError(err, "Gagal mengambil quest giver cloud."), "Gagal hapus draft quest giver.")
+	}
+	if questRecord == nil {
+		return config.WriteError(c, config.NewAppError("Quest tidak ditemukan.", fiber.StatusNotFound), "Gagal hapus draft quest giver.")
+	}
+	if questRecord.GiverAuthUserID != authRecord.AuthUserID {
+		return config.WriteError(c, config.NewAppError("Draft ini bukan milik giver login.", fiber.StatusForbidden), "Gagal hapus draft quest giver.")
+	}
+	if questRecord.Status != "draft" {
+		return config.WriteError(c, config.NewAppError("Quest yang sudah publish tidak bisa dihapus lewat draft.", fiber.StatusConflict), "Gagal hapus draft quest giver.")
+	}
+
+	if err := service.DeleteQuestDraft(ctx, questID); err != nil {
+		return config.WriteError(c, config.MapSupabaseError(err, "Gagal hapus draft quest giver cloud."), "Gagal hapus draft quest giver.")
+	}
+
+	return c.JSON(fiber.Map{
+		"success": true,
+		"message": "Draft quest giver berhasil dihapus.",
+		"data": fiber.Map{
+			"quest_id": questID,
+			"deleted":  true,
+		},
+	})
 }
 
 func resolveGiverQuestContext(c fiber.Ctx, service *Service, enforceUnlocked bool) (context.Context, context.CancelFunc, *authSessionRecord, *userRoleRecord, error) {
@@ -336,6 +468,159 @@ func collectCreateQuestRequest(body map[string]any) (createQuestPayload, error) 
 	return payload, nil
 }
 
+func buildQuestRatingState(ctx context.Context, service *Service, questID string, viewerAuthUserID string) (*questRatingStateRecord, error) {
+	assignments, err := service.ListQuestAssignmentsForRating(ctx, questID)
+	if err != nil {
+		return nil, err
+	}
+
+	state := &questRatingStateRecord{
+		AssignmentsTotal: len(assignments),
+	}
+	uniqueRaters := map[string]bool{}
+	for _, assignment := range assignments {
+		assignmentRating, err := service.FindRatingStateByAssignment(ctx, assignment.ID, viewerAuthUserID)
+		if err != nil {
+			return nil, err
+		}
+
+		state.RatingCount += assignmentRating.RatingCount
+		if assignmentRating.GiverRated {
+			state.GiverRated = true
+		}
+		if assignmentRating.RunnerRated {
+			state.RunnerRated = true
+		}
+		if assignmentRating.ViewerHasRated {
+			state.ViewerHasRated = true
+		}
+		if assignmentRating.BothRated {
+			state.AssignmentsBothRated++
+		}
+
+		rows, err := service.client.SelectMany(ctx, "quest_ratings", "rater_auth_user_id", map[string]string{
+			"assignment_id": assignment.ID,
+		}, &config.SelectOptions{Limit: 10})
+		if err != nil {
+			return nil, err
+		}
+		for _, row := range rows {
+			if raterID := config.NormalizeString(row["rater_auth_user_id"]); raterID != "" {
+				uniqueRaters[raterID] = true
+			}
+		}
+	}
+
+	state.UniqueRatingCount = len(uniqueRaters)
+	state.BothRated = state.AssignmentsTotal > 0 && state.AssignmentsBothRated == state.AssignmentsTotal
+	return state, nil
+}
+
+func isGiverClosedQuest(record *questRecord, escrow *escrowRecord, ratingState *questRatingStateRecord) bool {
+	if record == nil || ratingState == nil {
+		return false
+	}
+	escrowState := ""
+	if escrow != nil {
+		escrowState = escrow.EscrowState
+	}
+	return strings.EqualFold(record.Status, "completed") &&
+		strings.EqualFold(escrowState, "released") &&
+		ratingState.BothRated
+}
+
+func isGiverHistoryQuest(record *questRecord, escrow *escrowRecord, ratingState *questRatingStateRecord) bool {
+	if isGiverClosedQuest(record, escrow, ratingState) {
+		return true
+	}
+	if record != nil {
+		switch strings.ToLower(strings.TrimSpace(record.Status)) {
+		case "disputed", "cancelled":
+			return true
+		}
+	}
+	if escrow != nil {
+		switch strings.ToLower(strings.TrimSpace(escrow.EscrowState)) {
+		case "disputed", "refund":
+			return true
+		}
+	}
+	return false
+}
+
+func toGiverQuestPayload(record *questRecord, escrow *escrowRecord, ratingState *questRatingStateRecord) fiber.Map {
+	if record == nil {
+		return fiber.Map{}
+	}
+
+	currentRunnerCount := parseOptionalInt(record.CurrentRunnerCount)
+	maxRunner := parseOptionalInt(record.MaxRunner)
+	location := fiber.Map{
+		"label":        firstNonEmpty(record.SubDistrict, record.District, record.City, record.FullAddress),
+		"full_address": record.FullAddress,
+		"sub_district": record.SubDistrict,
+		"district":     record.District,
+		"city":         record.City,
+		"province":     record.Province,
+		"postal_code":  record.PostalCode,
+		"lat":          parseOptionalFloat(record.Lat),
+		"lng":          parseOptionalFloat(record.Lng),
+	}
+	capacity := fiber.Map{
+		"current_runner_count": currentRunnerCount,
+		"max_runner":           maxRunner,
+	}
+
+	return fiber.Map{
+		"id":                   record.ID,
+		"quest_id":             record.ID,
+		"title":                record.Title,
+		"description":          record.Description,
+		"category":             record.Category,
+		"skill_tags":           record.SkillTags,
+		"mode":                 record.Mode,
+		"status":               record.Status,
+		"reward_amount":        record.RewardAmount,
+		"reward_currency":      firstNonEmpty(record.RewardCurrency, "IDR"),
+		"reward_display":       buildRewardDisplay(record.RewardAmount, record.RewardCurrency),
+		"current_runner_count": currentRunnerCount,
+		"max_runner":           maxRunner,
+		"province":             record.Province,
+		"city":                 record.City,
+		"district":             record.District,
+		"sub_district":         record.SubDistrict,
+		"full_address":         record.FullAddress,
+		"postal_code":          record.PostalCode,
+		"lat":                  parseOptionalFloat(record.Lat),
+		"lng":                  parseOptionalFloat(record.Lng),
+		"location":             location,
+		"capacity":             capacity,
+		"starts_at":            optionalTimeValue(record.StartsAt),
+		"ends_at":              optionalTimeValue(record.EndsAt),
+		"published_at":         optionalTimeValue(record.PublishedAt),
+		"created_at":           optionalTimeValue(record.CreatedAt),
+		"updated_at":           optionalTimeValue(record.UpdatedAt),
+		"escrow":               toQuestEscrowPayload(escrow),
+		"rating_state":         toQuestRatingStatePayload(ratingState),
+	}
+}
+
+func toQuestRatingStatePayload(record *questRatingStateRecord) fiber.Map {
+	if record == nil {
+		record = &questRatingStateRecord{}
+	}
+	return fiber.Map{
+		"rating_count":           record.RatingCount,
+		"unique_rating_count":    record.UniqueRatingCount,
+		"assignments_total":      record.AssignmentsTotal,
+		"assignments_both_rated": record.AssignmentsBothRated,
+		"giver_rated":            record.GiverRated,
+		"runner_rated":           record.RunnerRated,
+		"viewer_has_rated":       record.ViewerHasRated,
+		"both_rated":             record.BothRated,
+	}
+}
+
 func collectStringArray(value any) []string {
 	switch typed := value.(type) {
 	case []any:
@@ -413,6 +698,18 @@ func parseOptionalInt(value string) any {
 		return nil
 	}
 	parsed, err := strconv.Atoi(trimmed)
+	if err != nil {
+		return nil
+	}
+	return parsed
+}
+
+func parseOptionalFloat(value string) any {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
+		return nil
+	}
+	parsed, err := strconv.ParseFloat(trimmed, 64)
 	if err != nil {
 		return nil
 	}

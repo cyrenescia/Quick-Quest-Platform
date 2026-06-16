@@ -734,6 +734,8 @@ func normalizeGender(value string) string {
 		return ""
 	case "male", "female", "other":
 		return strings.ToLower(strings.TrimSpace(value))
+	case "others":
+		return "other"
 	default:
 		return "__invalid__"
 	}

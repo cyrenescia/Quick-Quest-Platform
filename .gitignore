@@ -1,3 +1,5 @@
 .env
 Stream.exe
+Stream-StrictMode.exe
+.gocache/
 SCHEMA.SQL

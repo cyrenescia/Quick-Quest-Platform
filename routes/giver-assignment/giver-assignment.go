@@ -2,6 +2,7 @@ package giverassignment
 
 import (
 	"context"
+	"strconv"
 	"strings"
 	"time"
 
@@ -60,7 +61,12 @@ func handleGiverAssignmentGet(c fiber.Ctx, service *Service) error {
 			return config.WriteError(c, config.MapSupabaseError(err, "Gagal mengambil ringkasan runner cloud."), "Gagal mengambil assignment giver.")
 		}
 
-		items = append(items, toAssignmentItem(assignment, runner))
+		ratingState, err := service.FindRatingStateByAssignment(ctx, assignment.ID, authRecord.AuthUserID)
+		if err != nil {
+			return config.WriteError(c, config.MapSupabaseError(err, "Gagal mengambil rating state assignment cloud."), "Gagal mengambil assignment giver.")
+		}
+
+		items = append(items, toAssignmentItem(assignment, runner, ratingState))
 	}
 
 	return c.JSON(fiber.Map{
@@ -118,6 +124,13 @@ func handleGiverAssignmentPost(c fiber.Ctx, service *Service) error {
 	}
 	if questRecord.GiverAuthUserID != authRecord.AuthUserID {
 		return config.WriteError(c, config.NewAppError("Assignment ini bukan milik quest giver login.", fiber.StatusForbidden), "Gagal memproses audit assignment.")
+	}
+
+	if action == "confirm_candidate" || action == "reject_candidate" {
+		return handleGiverCandidateDecision(c, service, ctx, assignment, questRecord, action)
+	}
+	if action == "share_location" {
+		return handleGiverAssignmentShareLocation(c, service, ctx, assignment, questRecord, body)
 	}
 
 	nextAssignmentStatus, nextQuestStatus, err := resolveAuditTransition(action, assignment.AssignmentStatus)
@@ -187,6 +200,115 @@ func handleGiverAssignmentPost(c fiber.Ctx, service *Service) error {
 	})
 }
 
+func handleGiverAssignmentShareLocation(c fiber.Ctx, service *Service, ctx context.Context, assignment *questAssignmentRecord, questRecord *questRecord, body map[string]any) error {
+	if !isShareLocationAllowed(assignment.AssignmentStatus) {
+		return config.WriteError(c, config.NewAppError("Lokasi detail hanya bisa dibagikan setelah kandidat accepted atau pekerjaan active.", fiber.StatusConflict), "Gagal share lokasi detail.")
+	}
+
+	sharedAt := time.Now().UTC()
+	workLocation := buildWorkLocationPayload(questRecord, body, sharedAt)
+	if strings.TrimSpace(config.NormalizeString(workLocation["full_address"])) == "" {
+		return config.WriteError(c, config.NewAppError("Alamat lokasi kerja belum tersedia untuk dibagikan.", fiber.StatusBadRequest), "Gagal share lokasi detail.")
+	}
+
+	if err := service.ShareQuestAssignmentLocation(ctx, assignment.ID, workLocation, sharedAt); err != nil {
+		return config.WriteError(c, config.MapSupabaseError(err, "Gagal menyimpan lokasi detail assignment cloud."), "Gagal share lokasi detail.")
+	}
+
+	return c.JSON(fiber.Map{
+		"success": true,
+		"message": "Lokasi detail berhasil dibagikan ke Runner.",
+		"data": fiber.Map{
+			"assignment_id":      assignment.ID,
+			"quest_id":           assignment.QuestID,
+			"assignment_status":  assignment.AssignmentStatus,
+			"work_location":      workLocation,
+			"location_shared_at": sharedAt,
+		},
+	})
+}
+
+func handleGiverCandidateDecision(c fiber.Ctx, service *Service, ctx context.Context, assignment *questAssignmentRecord, questRecord *questRecord, action string) error {
+	if !strings.EqualFold(assignment.AssignmentStatus, "pending") {
+		return config.WriteError(c, config.NewAppError("Candidate decision hanya bisa diproses untuk assignment pending.", fiber.StatusConflict), "Gagal memproses kandidat runner.")
+	}
+
+	if action == "reject_candidate" {
+		if err := service.UpdateQuestAssignmentCandidate(ctx, assignment.ID, "rejected"); err != nil {
+			return config.WriteError(c, config.MapSupabaseError(err, "Gagal menolak kandidat runner cloud."), "Gagal memproses kandidat runner.")
+		}
+
+		return c.JSON(fiber.Map{
+			"success": true,
+			"message": "Kandidat runner ditolak.",
+			"data": fiber.Map{
+				"assignment_id":     assignment.ID,
+				"quest_id":          assignment.QuestID,
+				"action":            action,
+				"previous_status":   assignment.AssignmentStatus,
+				"assignment_status": "rejected",
+				"quest_status":      questRecord.Status,
+				"current_runner_count": parseOrZeroInt(
+					questRecord.CurrentRunnerCount,
+				),
+				"max_runner": parseOrZeroInt(questRecord.MaxRunner),
+			},
+		})
+	}
+
+	if !strings.EqualFold(questRecord.Status, "open") {
+		return config.WriteError(c, config.NewAppError("Quest tidak sedang open untuk konfirmasi kandidat.", fiber.StatusConflict), "Gagal memproses kandidat runner.")
+	}
+
+	currentCount := parseOrZeroInt(questRecord.CurrentRunnerCount)
+	maxRunner := parseOrZeroInt(questRecord.MaxRunner)
+	if maxRunner <= 0 {
+		maxRunner = 1
+	}
+	if currentCount >= maxRunner {
+		return config.WriteError(c, config.NewAppError("Slot runner quest sudah penuh.", fiber.StatusConflict), "Gagal memproses kandidat runner.")
+	}
+
+	nextCount := currentCount + 1
+	nextQuestStatus := "open"
+	if strings.EqualFold(questRecord.Mode, "solo") || nextCount >= maxRunner {
+		nextQuestStatus = "matched"
+	}
+
+	if err := service.UpdateQuestAssignmentCandidate(ctx, assignment.ID, "accepted"); err != nil {
+		return config.WriteError(c, config.MapSupabaseError(err, "Gagal mengonfirmasi kandidat runner cloud."), "Gagal memproses kandidat runner.")
+	}
+	if err := service.UpdateQuestAfterCandidateConfirm(ctx, questRecord.ID, nextQuestStatus, nextCount); err != nil {
+		return config.WriteError(c, config.MapSupabaseError(err, "Gagal memperbarui slot quest cloud."), "Gagal memproses kandidat runner.")
+	}
+
+	cancelledPending := 0
+	if strings.EqualFold(questRecord.Mode, "solo") {
+		var err error
+		cancelledPending, err = service.CancelOtherPendingAssignments(ctx, questRecord.ID, assignment.ID)
+		if err != nil {
+			return config.WriteError(c, config.MapSupabaseError(err, "Gagal menutup kandidat solo lain cloud."), "Gagal memproses kandidat runner.")
+		}
+	}
+
+	return c.JSON(fiber.Map{
+		"success": true,
+		"message": "Kandidat runner dikonfirmasi.",
+		"data": fiber.Map{
+			"assignment_id":           assignment.ID,
+			"quest_id":                assignment.QuestID,
+			"action":                  action,
+			"previous_status":         assignment.AssignmentStatus,
+			"assignment_status":       "accepted",
+			"previous_quest_status":   questRecord.Status,
+			"quest_status":            nextQuestStatus,
+			"current_runner_count":    nextCount,
+			"max_runner":              maxRunner,
+			"cancelled_pending_count": cancelledPending,
+		},
+	})
+}
+
 func resolveGiverAssignmentContext(c fiber.Ctx, service *Service) (context.Context, context.CancelFunc, *authSessionRecord, error) {
 	sessionToken := config.ResolveSessionToken(c, service.cfg.SessionCookieName)
 	if sessionToken == "" {
@@ -209,6 +331,15 @@ func resolveGiverAssignmentContext(c fiber.Ctx, service *Service) (context.Conte
 
 func resolveGiverAssignmentAction(c fiber.Ctx) string {
 	path := strings.TrimSuffix(strings.ToLower(c.Path()), "/")
+	if strings.HasSuffix(path, "/share-location") {
+		return "share_location"
+	}
+	if strings.HasSuffix(path, "/confirm") {
+		return "confirm_candidate"
+	}
+	if strings.HasSuffix(path, "/reject") {
+		return "reject_candidate"
+	}
 	if strings.HasSuffix(path, "/accept") {
 		return "accept"
 	}
@@ -219,6 +350,44 @@ func resolveGiverAssignmentAction(c fiber.Ctx) string {
 		return "dispute"
 	}
 	return ""
+}
+
+func isShareLocationAllowed(status string) bool {
+	switch strings.ToLower(strings.TrimSpace(status)) {
+	case "accepted", "active":
+		return true
+	default:
+		return false
+	}
+}
+
+func buildWorkLocationPayload(quest *questRecord, body map[string]any, sharedAt time.Time) map[string]any {
+	payload := map[string]any{
+		"label":        firstNonEmpty(config.NormalizeString(body["label"]), quest.SubDistrict, quest.District, quest.City, quest.FullAddress),
+		"full_address": firstNonEmpty(config.NormalizeString(body["full_address"]), quest.FullAddress),
+		"province":     firstNonEmpty(config.NormalizeString(body["province"]), quest.Province),
+		"city":         firstNonEmpty(config.NormalizeString(body["city"]), quest.City),
+		"district":     firstNonEmpty(config.NormalizeString(body["district"]), quest.District),
+		"sub_district": firstNonEmpty(config.NormalizeString(body["sub_district"]), quest.SubDistrict),
+		"postal_code":  firstNonEmpty(config.NormalizeString(body["postal_code"]), quest.PostalCode),
+		"note":         config.NormalizeString(body["note"]),
+		"shared_at":    sharedAt,
+		"shared_by":    "giver",
+	}
+
+	if lat := parseOptionalFloatFromAny(body["lat"]); lat != nil {
+		payload["lat"] = *lat
+	} else if lat := parseOptionalFloatText(quest.Lat); lat != nil {
+		payload["lat"] = *lat
+	}
+
+	if lng := parseOptionalFloatFromAny(body["lng"]); lng != nil {
+		payload["lng"] = *lng
+	} else if lng := parseOptionalFloatText(quest.Lng); lng != nil {
+		payload["lng"] = *lng
+	}
+
+	return payload
 }
 
 func resolveAuditTransition(action string, currentStatus string) (string, string, error) {
@@ -265,7 +434,7 @@ func resolveAuditEscrowTransition(action string) (string, string) {
 	}
 }
 
-func toAssignmentItem(record questAssignmentRecord, runner *runnerSummaryRecord) fiber.Map {
+func toAssignmentItem(record questAssignmentRecord, runner *runnerSummaryRecord, ratingState *ratingStateRecord) fiber.Map {
 	return fiber.Map{
 		"id":                  record.ID,
 		"quest_id":            record.QuestID,
@@ -274,6 +443,8 @@ func toAssignmentItem(record questAssignmentRecord, runner *runnerSummaryRecord)
 		"joined_at":           optionalTimeValue(record.JoinedAt),
 		"started_at":          optionalTimeValue(record.StartedAt),
 		"finished_at":         optionalTimeValue(record.FinishedAt),
+		"work_location":       optionalWorkLocationValue(record.WorkLocation),
+		"location_shared_at":  optionalTimeValue(record.LocationSharedAt),
 		"runner": fiber.Map{
 			"auth_user_id": resolveRunnerAuthUserID(runner, record.RunnerAuthUserID),
 			"fullname":     resolveRunnerFullname(runner),
@@ -281,6 +452,21 @@ func toAssignmentItem(record questAssignmentRecord, runner *runnerSummaryRecord)
 			"email":        resolveRunnerEmail(runner),
 			"phone":        resolveRunnerPhone(runner),
 		},
+		"rating_state": toAssignmentRatingStatePayload(ratingState),
+	}
+}
+
+func toAssignmentRatingStatePayload(record *ratingStateRecord) fiber.Map {
+	if record == nil {
+		record = &ratingStateRecord{}
+	}
+	return fiber.Map{
+		"rating_count":        record.RatingCount,
+		"unique_rating_count": record.UniqueRatingCount,
+		"giver_rated":         record.GiverRated,
+		"runner_rated":        record.RunnerRated,
+		"viewer_has_rated":    record.ViewerHasRated,
+		"both_rated":          record.BothRated,
 	}
 }
 
@@ -324,4 +510,49 @@ func optionalTimeValue(value *time.Time) any {
 		return nil
 	}
 	return value.UTC()
+}
+
+func optionalWorkLocationValue(value map[string]any) any {
+	if len(value) == 0 {
+		return nil
+	}
+	return value
+}
+
+func parseOrZeroInt(value string) int {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
+		return 0
+	}
+	parsed, err := strconv.Atoi(trimmed)
+	if err != nil {
+		return 0
+	}
+	return parsed
+}
+
+func parseOptionalFloatFromAny(value any) *float64 {
+	normalized := strings.TrimSpace(config.NormalizeString(value))
+	return parseOptionalFloatText(normalized)
+}
+
+func parseOptionalFloatText(value string) *float64 {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
+		return nil
+	}
+	parsed, err := strconv.ParseFloat(trimmed, 64)
+	if err != nil {
+		return nil
+	}
+	return &parsed
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return strings.TrimSpace(value)
+		}
+	}
+	return ""
 }

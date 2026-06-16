@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"Stream-StrictMode/config"
+	"Stream-StrictMode/routes/admin"
 	"Stream-StrictMode/routes/dispute"
 	giverassignment "Stream-StrictMode/routes/giver-assignment"
 	giverquest "Stream-StrictMode/routes/giver-quest"
@@ -12,6 +13,7 @@ import (
 	"Stream-StrictMode/routes/logout"
 	"Stream-StrictMode/routes/profile"
 	"Stream-StrictMode/routes/quest"
+	"Stream-StrictMode/routes/rating"
 	"Stream-StrictMode/routes/register"
 	runnerquest "Stream-StrictMode/routes/runner-quest"
 	userverification "Stream-StrictMode/routes/user-verification"
@@ -46,8 +48,12 @@ func main() {
 	giverQuestHandler := giverquest.GiverQuest(giverQuestService)
 	giverAssignmentService := giverassignment.NewService(client, appConfig)
 	giverAssignmentHandler := giverassignment.GiverAssignment(giverAssignmentService)
+	adminService := admin.NewService(client, appConfig)
+	adminHandler := admin.Admin(adminService)
 	disputeService := dispute.NewService(client, appConfig)
 	disputeHandler := dispute.Dispute(disputeService)
+	ratingService := rating.NewService(client, appConfig)
+	ratingHandler := rating.Rating(ratingService)
 	runnerQuestService := runnerquest.NewService(client, appConfig)
 	runnerQuestHandler := runnerquest.RunnerQuest(runnerQuestService)
 	verificationService := userverification.NewService(client, appConfig)
@@ -81,8 +87,13 @@ func main() {
 	api.Options("/quests", questHandler)
 	api.Options("/quests/:id", questHandler)
 	api.Get("/giver/quests", giverQuestHandler)
+	api.Get("/giver/quests/history", giverQuestHandler)
 	api.Post("/giver/quests", giverQuestHandler)
 	api.Options("/giver/quests", giverQuestHandler)
+	api.Options("/giver/quests/history", giverQuestHandler)
+	api.Put("/giver/quests/:id", giverQuestHandler)
+	api.Delete("/giver/quests/:id", giverQuestHandler)
+	api.Options("/giver/quests/:id", giverQuestHandler)
 	api.Post("/giver/quests/:id/escrow/lock", giverQuestHandler)
 	api.Options("/giver/quests/:id/escrow/lock", giverQuestHandler)
 	api.Post("/giver/quests/:id/publish", giverQuestHandler)
@@ -90,11 +101,35 @@ func main() {
 	api.Get("/giver/quests/:id/assignments", giverAssignmentHandler)
 	api.Options("/giver/quests/:id/assignments", giverAssignmentHandler)
 	api.Post("/giver/assignments/:id/accept", giverAssignmentHandler)
+	api.Post("/giver/assignments/:id/confirm", giverAssignmentHandler)
+	api.Post("/giver/assignments/:id/reject", giverAssignmentHandler)
+	api.Post("/giver/assignments/:id/share-location", giverAssignmentHandler)
 	api.Post("/giver/assignments/:id/request-revision", giverAssignmentHandler)
 	api.Post("/giver/assignments/:id/dispute", giverAssignmentHandler)
 	api.Options("/giver/assignments/:id/accept", giverAssignmentHandler)
+	api.Options("/giver/assignments/:id/confirm", giverAssignmentHandler)
+	api.Options("/giver/assignments/:id/reject", giverAssignmentHandler)
+	api.Options("/giver/assignments/:id/share-location", giverAssignmentHandler)
 	api.Options("/giver/assignments/:id/request-revision", giverAssignmentHandler)
 	api.Options("/giver/assignments/:id/dispute", giverAssignmentHandler)
+	api.Get("/admin/verifications", adminHandler)
+	api.Get("/admin/verifications/:id", adminHandler)
+	api.Get("/admin/disputes", adminHandler)
+	api.Get("/admin/disputes/:id", adminHandler)
+	api.Post("/admin/verifications/:id/approve", adminHandler)
+	api.Post("/admin/verifications/:id/reject", adminHandler)
+	api.Post("/admin/verifications/:id/resubmission", adminHandler)
+	api.Post("/admin/disputes/:id/mediate", adminHandler)
+	api.Post("/admin/escrows/auto-release", adminHandler)
+	api.Options("/admin/verifications", adminHandler)
+	api.Options("/admin/verifications/:id", adminHandler)
+	api.Options("/admin/disputes", adminHandler)
+	api.Options("/admin/disputes/:id", adminHandler)
+	api.Options("/admin/verifications/:id/approve", adminHandler)
+	api.Options("/admin/verifications/:id/reject", adminHandler)
+	api.Options("/admin/verifications/:id/resubmission", adminHandler)
+	api.Options("/admin/disputes/:id/mediate", adminHandler)
+	api.Options("/admin/escrows/auto-release", adminHandler)
 	api.Get("/disputes", disputeHandler)
 	api.Get("/disputes/:id", disputeHandler)
 	api.Post("/disputes", disputeHandler)
@@ -104,11 +139,15 @@ func main() {
 	api.Options("/disputes/:id", disputeHandler)
 	api.Options("/disputes/:id/evidence", disputeHandler)
 	api.Options("/disputes/:id/mediate", disputeHandler)
+	api.Post("/ratings", ratingHandler)
+	api.Options("/ratings", ratingHandler)
 	api.Get("/runner/quests/active", runnerQuestHandler)
+	api.Get("/runner/quests/history", runnerQuestHandler)
 	api.Post("/runner/quests/:id/take", runnerQuestHandler)
 	api.Post("/runner/quests/:id/start", runnerQuestHandler)
 	api.Post("/runner/quests/:id/finish", runnerQuestHandler)
 	api.Options("/runner/quests/active", runnerQuestHandler)
+	api.Options("/runner/quests/history", runnerQuestHandler)
 	api.Options("/runner/quests/:id/take", runnerQuestHandler)
 	api.Options("/runner/quests/:id/start", runnerQuestHandler)
 	api.Options("/runner/quests/:id/finish", runnerQuestHandler)
