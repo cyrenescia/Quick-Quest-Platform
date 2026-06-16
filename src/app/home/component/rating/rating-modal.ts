@@ -5,10 +5,12 @@ export type RatingTarget = {
   role: "runner" | "giver";
   questTitle: string;
   questId: string;
+  assignmentId: string;
 };
 
 export type RatingSubmitPayload = {
   questId: string;
+  assignmentId: string;
   targetRole: "runner" | "giver";
   score: number;
   tags: string[];
@@ -22,5 +24,5 @@ export {
   ratingTagsByRole,
   estimatePPGain,
   resolveScoreColor,
-  submitRatingDummy,
+  submitRating,
 } from "./rating-modal.service";

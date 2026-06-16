@@ -2,7 +2,10 @@ import { useEffect, useState } from "react";
 import { cn, Surface } from "../../../../home.ui";
 import { RunnerQuestFeedDetailPage } from "./feed-detail/feed-detail.tsx";
 import {
+  canTakeQuestFromFeed,
   resolveInitialRunnerQuestFeedSubView,
+  resolveQuestFeedActionLabel,
+  resolveQuestFeedMatchReason,
   resolveQuestFeedModeClass,
   syncRunnerQuestFeedSubViewStorage,
   useRunnerQuestFeedVM,
@@ -12,7 +15,6 @@ import {
 export function RunnerQuestFeedPage({
   onBack,
   onOpenActiveQuest,
-  onOpenPartyLobby,
 }: {
   onBack: () => void;
   onOpenActiveQuest: () => void;
@@ -28,14 +30,6 @@ export function RunnerQuestFeedPage({
   }, [subView]);
 
   if (subView?.view === "Detail") {
-    const selectedQuest = vm.quests.find((quest) => quest.id === subView.questId);
-    const mappedPartyId =
-      selectedQuest?.id === "QF-202"
-        ? "P-102"
-        : selectedQuest?.id === "QF-204"
-          ? "P-101"
-          : "P-101";
-
     return (
       <RunnerQuestFeedDetailPage
         questId={subView.questId}
@@ -46,7 +40,7 @@ export function RunnerQuestFeedPage({
         }}
         onJoinPartyLobby={async () => {
           await vm.takeQuest(subView.questId);
-          onOpenPartyLobby(mappedPartyId);
+          onOpenActiveQuest();
         }}
       />
     );
@@ -116,6 +110,9 @@ export function RunnerQuestFeedPage({
               <span className="rounded-[8px] bg-base-200 px-2 py-1 text-[11px] font-semibold text-base-content/70">
                 {quest.distanceKm} km
               </span>
+              <span className="rounded-[8px] bg-info/10 px-2 py-1 text-[11px] font-semibold text-info">
+                Radius {quest.activeRadiusKm ?? Math.max(1, quest.distanceKm)} km
+              </span>
               <span className="rounded-[8px] bg-base-200 px-2 py-1 text-[11px] font-semibold text-base-content/70">
                 Match {quest.matchScore}%
               </span>
@@ -129,6 +126,14 @@ export function RunnerQuestFeedPage({
             <p className="mt-3 text-sm text-base-content/70">
               {quest.briefSummary}
             </p>
+            <div className="mt-3 rounded-[10px] border border-info/20 bg-info/5 px-3 py-2">
+              <p className="text-[11px] font-bold uppercase tracking-[0.12em] text-info/80">
+                Alasan Match
+              </p>
+              <p className="mt-1 text-xs leading-relaxed text-base-content/70">
+                {resolveQuestFeedMatchReason(quest)}
+              </p>
+            </div>
 
             <div className="mt-4 flex flex-wrap gap-2">
               <button
@@ -143,23 +148,21 @@ export function RunnerQuestFeedPage({
                 <button
                   type="button"
                   onClick={() =>
-                    void vm.takeQuest(quest.id).then(() =>
-                      onOpenPartyLobby(quest.id === "QF-202" ? "P-102" : "P-101"),
-                    )
+                    void vm.takeQuest(quest.id).then(onOpenActiveQuest)
                   }
-                  disabled={vm.actionQuestId === quest.id}
+                  disabled={vm.actionQuestId === quest.id || !canTakeQuestFromFeed(quest)}
                   className="btn h-10 min-h-10 rounded-[10px] border-none bg-secondary px-5 text-sm font-bold text-secondary-content"
                 >
-                  {vm.actionQuestId === quest.id ? "Joining..." : "Join Group Lobby"}
+                  {resolveQuestFeedActionLabel(quest, vm.actionQuestId === quest.id)}
                 </button>
               ) : (
                 <button
                   type="button"
                   onClick={() => void vm.takeQuest(quest.id).then(onOpenActiveQuest)}
-                  disabled={vm.actionQuestId === quest.id}
+                  disabled={vm.actionQuestId === quest.id || !canTakeQuestFromFeed(quest)}
                   className="btn h-10 min-h-10 rounded-[10px] border-none bg-primary px-5 text-sm font-bold text-primary-content"
                 >
-                  {vm.actionQuestId === quest.id ? "Mengambil..." : "Ambil Quest"}
+                  {resolveQuestFeedActionLabel(quest, vm.actionQuestId === quest.id)}
                 </button>
               )}
             </div>

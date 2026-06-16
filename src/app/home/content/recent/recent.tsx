@@ -11,10 +11,12 @@ import {
   syncRecentSubViewStorage,
   isRecentQuestCompleted,
   isRecentQuestDisputed,
+  type ContractArchiveRow,
   type QuestHistoryRow,
   type RecentSubView,
   type RecentViewText,
 } from "./recent";
+import { fetchRecentHistoryFromApi } from "./recent.service";
 import { DisputeCenter } from "./page/dispute-center";
 import { ContractInvoice } from "./page/contract-invoice";
 import { useRole } from "../../role.context";
@@ -104,6 +106,10 @@ function RecentComponent() {
   const [subView, setSubView] = useState<RecentSubView | null>(
     resolveInitialRecentSubView,
   );
+  const [liveHistory, setLiveHistory] = useState<{
+    contractArchiveRows: ContractArchiveRow[];
+    questHistoryRows: QuestHistoryRow[];
+  } | null>(null);
 
   // Role-aware data resolution — semua derived dari role context, bukan static import
   const { role, isGiverVerified } = useRole();
@@ -111,10 +117,28 @@ function RecentComponent() {
   const recentRoleData = resolveRecentRoleData(roleContext);
   const recentViewText = recentRoleData.viewCopy;
   const recentSummaryMetrics = recentRoleData.summaryMetrics;
-  const contractArchiveRows = recentRoleData.contractArchiveRows;
-  const questHistoryRows = recentRoleData.questHistoryRows;
+  const contractArchiveRows = liveHistory?.contractArchiveRows.length
+    ? liveHistory.contractArchiveRows
+    : recentRoleData.contractArchiveRows;
+  const questHistoryRows = liveHistory?.questHistoryRows.length
+    ? liveHistory.questHistoryRows
+    : recentRoleData.questHistoryRows;
   const transactionHistoryRows = recentRoleData.transactionHistoryRows;
   const ppLedgerRows = recentRoleData.ppLedgerRows;
+
+  useEffect(() => {
+    let mounted = true;
+    fetchRecentHistoryFromApi(roleContext)
+      .then((history) => {
+        if (mounted) setLiveHistory(history);
+      })
+      .catch(() => {
+        if (mounted) setLiveHistory(null);
+      });
+    return () => {
+      mounted = false;
+    };
+  }, [roleContext]);
 
   useEffect(() => {
     syncRecentSubViewStorage(subView);

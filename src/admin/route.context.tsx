@@ -35,7 +35,7 @@ const AdminRouteContext = createContext<AdminRouteContextType | undefined>(
 
 export function AdminRouteProvider({
   children,
-  initialView = "administrator",
+  initialView = "login",
 }: {
   children: ReactNode;
   initialView?: AdminRouteView;

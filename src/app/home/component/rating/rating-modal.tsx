@@ -5,7 +5,7 @@ import {
   ratingModalCopy,
   ratingTagsByRole,
   resolveScoreColor,
-  submitRatingDummy,
+  submitRating,
 } from "./rating-modal";
 
 // ─── Props ────────────────────────────────────────────────────────────────────
@@ -269,6 +269,7 @@ export default function RatingModal({
   const [score, setScore] = useState(0);
   const [selectedTags, setSelectedTags] = useState<string[]>([]);
   const [comment, setComment] = useState("");
+  const [errorMessage, setErrorMessage] = useState("");
   const [submitState, setSubmitState] = useState<
     "idle" | "loading" | "success"
   >("idle");
@@ -286,6 +287,7 @@ export default function RatingModal({
     setScore(0);
     setSelectedTags([]);
     setComment("");
+    setErrorMessage("");
     setSubmitState("idle");
   }
 
@@ -297,22 +299,25 @@ export default function RatingModal({
   async function handleSubmit() {
     if (score === 0) return;
     setSubmitState("loading");
+    setErrorMessage("");
     const payload: RatingSubmitPayload = {
       questId: target.questId,
+      assignmentId: target.assignmentId,
       targetRole: target.role,
       score,
       tags: selectedTags,
       comment,
     };
     try {
-      await submitRatingDummy(payload);
+      await submitRating(payload);
       onSubmit?.(payload);
       setSubmitState("success");
       setTimeout(() => {
         resetState();
         onClose();
       }, 2200);
-    } catch {
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : "Gagal mengirim rating.");
       setSubmitState("idle");
     }
   }
@@ -440,6 +445,11 @@ export default function RatingModal({
                   <p className="mt-1 text-right text-[10px] text-base-content/35">
                     {comment.length}/{copy.commentMaxLength}
                   </p>
+                  {errorMessage ? (
+                    <p className="mt-2 rounded-[8px] bg-error/10 px-3 py-2 text-xs font-semibold text-error">
+                      {errorMessage}
+                    </p>
+                  ) : null}
                 </div>
               )}
 

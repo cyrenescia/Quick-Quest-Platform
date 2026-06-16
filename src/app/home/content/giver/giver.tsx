@@ -8,7 +8,6 @@ import {
   giverBroadcastFilters,
   giverBudgetCards,
   giverCandidateSortOptions,
-  giverCandidates,
   giverEscrowEntries,
   giverKpiCards,
   giverPostQuestInsights,
@@ -26,6 +25,7 @@ import {
   sortGiverCandidates,
   type BroadcastFilter,
   type CandidateSort,
+  type GiverCandidate,
   type GiverBroadcastStatus,
   type GiverSubView,
   useGiverDashboardVM,
@@ -153,8 +153,8 @@ function GiverComponent() {
   );
 
   const sortedCandidates = useMemo(
-    () => sortGiverCandidates(giverCandidates, candidateSort),
-    [candidateSort],
+    () => sortGiverCandidates(dashboardVM.candidates, candidateSort),
+    [candidateSort, dashboardVM.candidates],
   );
 
   const briefSummary = useMemo(
@@ -186,9 +186,24 @@ function GiverComponent() {
   }
 
   if (subView?.view === "CandidateReview") {
+    const selectedCandidate = dashboardVM.candidates.find(
+      (candidate: GiverCandidate) => candidate.id === subView.payload.id,
+    );
     return (
       <CandidateReview
         candidateId={subView.payload.id}
+        candidate={selectedCandidate}
+        isWorking={dashboardVM.candidateActionId === selectedCandidate?.assignmentId}
+        onConfirm={(assignmentId) =>
+          dashboardVM.confirmCandidate(assignmentId).then((success) => {
+            if (success) setSubView(null);
+          })
+        }
+        onReject={(assignmentId) =>
+          dashboardVM.rejectCandidate(assignmentId).then((success) => {
+            if (success) setSubView(null);
+          })
+        }
         onBack={() => setSubView(null)}
       />
     );
@@ -476,16 +491,70 @@ function GiverComponent() {
                 )}
 
                 {dashboardVM.assignmentsByQuest[quest.id]
-                  ?.filter((assignment) => assignment.status === "finished")
+                  ?.filter((assignment) => assignment.status === "accepted" || assignment.status === "active")
                   .map((assignment) => (
                     <div
                       key={assignment.id}
-                      className="mt-3 rounded-[10px] border border-warning/30 bg-warning/10 p-3"
+                      className="mt-3 rounded-[10px] border border-info/30 bg-info/10 p-3"
                     >
                       <div className="flex flex-wrap items-center justify-between gap-2">
                         <div>
-                          <p className="text-[10px] font-bold uppercase tracking-[0.12em] text-warning">
-                            Pending Audit
+                          <p className="text-[10px] font-bold uppercase tracking-[0.12em] text-info">
+                            Runner Accepted
+                          </p>
+                          <p className="mt-0.5 text-xs font-semibold text-base-content">
+                            {assignment.runnerName}
+                          </p>
+                          {assignment.hasSharedLocation ? (
+                            <p className="mt-0.5 text-[11px] font-semibold text-success">
+                              Lokasi detail terkirim {assignment.locationSharedAt || ""}
+                            </p>
+                          ) : (
+                            <p className="mt-0.5 text-[11px] text-base-content/60">
+                              Share pin detail sebelum Runner mulai kerja.
+                            </p>
+                          )}
+                        </div>
+                        <button
+                          type="button"
+                          disabled={dashboardVM.locationActionId === assignment.id}
+                          onClick={() => void dashboardVM.shareAssignmentLocation(assignment.id)}
+                          className="btn h-8 min-h-8 rounded-[8px] border-none bg-info px-3 text-[11px] font-bold text-info-content"
+                        >
+                          {dashboardVM.locationActionId === assignment.id
+                            ? "Mengirim..."
+                            : assignment.hasSharedLocation
+                              ? "Share Ulang Lokasi"
+                              : "Share Lokasi Detail"}
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+
+                {dashboardVM.assignmentsByQuest[quest.id]
+                  ?.filter((assignment) => assignment.status === "finished")
+                  .map((assignment) => {
+                    const isReleased = quest.escrowState === "RELEASED";
+                    const canRate = isReleased && assignment.viewerHasRated !== true;
+                    return (
+                    <div
+                      key={assignment.id}
+                      className={cn(
+                        "mt-3 rounded-[10px] border p-3",
+                        isReleased
+                          ? "border-success/30 bg-success/10"
+                          : "border-warning/30 bg-warning/10",
+                      )}
+                    >
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <div>
+                          <p
+                            className={cn(
+                              "text-[10px] font-bold uppercase tracking-[0.12em]",
+                              isReleased ? "text-success" : "text-warning",
+                            )}
+                          >
+                            {isReleased ? "Menunggu Rating" : "Pending Audit"}
                           </p>
                           <p className="mt-0.5 text-xs font-semibold text-base-content">
                             {assignment.runnerName} selesai pada{" "}
@@ -496,9 +565,22 @@ function GiverComponent() {
                           <button
                             type="button"
                             disabled={
-                              dashboardVM.auditActionId === assignment.id
+                              dashboardVM.auditActionId === assignment.id ||
+                              (isReleased && !canRate)
                             }
                             onClick={() => {
+                              if (isReleased) {
+                                if (canRate) {
+                                  setRatingTarget({
+                                    name: assignment.runnerName,
+                                    role: "runner",
+                                    questTitle: quest.title,
+                                    questId: quest.id,
+                                    assignmentId: assignment.id,
+                                  });
+                                }
+                                return;
+                              }
                               void dashboardVM
                                 .auditAssignment(assignment.id, "accept")
                                 .then(() => {
@@ -508,12 +590,18 @@ function GiverComponent() {
                                     role: "runner",
                                     questTitle: quest.title,
                                     questId: quest.id,
+                                    assignmentId: assignment.id,
                                   });
                                 });
                             }}
-                            className="btn h-8 min-h-8 rounded-[8px] border-none bg-success px-3 text-[11px] font-bold text-success-content"
+                            className={cn(
+                              "btn h-8 min-h-8 rounded-[8px] border-none px-3 text-[11px] font-bold",
+                              isReleased
+                                ? "bg-primary text-primary-content disabled:bg-base-200 disabled:text-base-content/55"
+                                : "bg-success text-success-content",
+                            )}
                           >
-                            Terima
+                            {isReleased ? (canRate ? "Beri Rating" : "Rating Terkirim") : "Terima"}
                           </button>
                           <button
                             type="button"
@@ -526,7 +614,10 @@ function GiverComponent() {
                                 "revision",
                               )
                             }
-                            className="btn h-8 min-h-8 rounded-[8px] border-none bg-warning px-3 text-[11px] font-bold text-warning-content"
+                            className={cn(
+                              "btn h-8 min-h-8 rounded-[8px] border-none bg-warning px-3 text-[11px] font-bold text-warning-content",
+                              isReleased ? "hidden" : "",
+                            )}
                           >
                             Revisi
                           </button>
@@ -541,14 +632,18 @@ function GiverComponent() {
                                 "dispute",
                               )
                             }
-                            className="btn h-8 min-h-8 rounded-[8px] border-none bg-error px-3 text-[11px] font-bold text-error-content"
+                            className={cn(
+                              "btn h-8 min-h-8 rounded-[8px] border-none bg-error px-3 text-[11px] font-bold text-error-content",
+                              isReleased ? "hidden" : "",
+                            )}
                           >
                             Dispute
                           </button>
                         </div>
                       </div>
                     </div>
-                  ))}
+                    );
+                  })}
 
                 <div className="mt-3 grid gap-2 sm:grid-cols-3">
                   <div className="rounded-[9px] border border-base-300/70 bg-base-100 px-3 py-2">
@@ -658,6 +753,12 @@ function GiverComponent() {
                 <p className="mt-1 text-xs text-base-content/65">
                   {candidate.skill}
                 </p>
+                {candidate.questTitle ? (
+                  <p className="mt-1 text-[11px] font-semibold text-base-content/55">
+                    {candidate.questTitle}
+                    {candidate.appliedAt ? ` • ${candidate.appliedAt}` : ""}
+                  </p>
+                ) : null}
                 <div className="mt-2 grid grid-cols-3 gap-1.5 text-[11px]">
                   <span className="rounded-[8px] bg-base-200 px-2 py-1 text-center font-semibold text-base-content/70">
                     {candidate.distanceKm}{" "}
@@ -923,6 +1024,9 @@ function GiverComponent() {
         <RatingModal
           isOpen={true}
           target={ratingTarget}
+          onSubmit={() => {
+            void dashboardVM.refresh();
+          }}
           onClose={() => setRatingTarget(null)}
         />
       )}

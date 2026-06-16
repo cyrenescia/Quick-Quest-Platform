@@ -4,6 +4,7 @@ import {
   getRunnerDeviceLocationRaw,
   takeRunnerQuestFromApi,
   type RunnerQuestFeedItem,
+  type RunnerRawCoords,
 } from "../../runner.service";
 
 export function getRunnerQuestFeedSeed(): RunnerQuestFeedItem[] {
@@ -20,7 +21,14 @@ export async function fetchRunnerQuestFeedLive(): Promise<RunnerQuestFeedItem[]>
 }
 
 export async function takeRunnerQuestLive(questId: string): Promise<void> {
-  await takeRunnerQuestFromApi(questId);
+  let coords: RunnerRawCoords | undefined;
+  try {
+    coords = await getRunnerDeviceLocationRaw();
+  } catch {
+    coords = undefined;
+  }
+
+  await takeRunnerQuestFromApi(questId, coords);
 }
 
 export const RUNNER_QUEST_FEED_SUBVIEW_STORAGE_KEY_SEED =

@@ -64,6 +64,7 @@ export type RunnerReliabilityBadge = {
 };
 
 export type RunnerActiveQuestStatus =
+  | "PENDING_GIVER_CONFIRMATION"
   | "HEADING_TO_LOCATION"
   | "ON_SITE"
   | "IN_PROGRESS"
@@ -72,16 +73,26 @@ export type RunnerActiveQuestStatus =
 
 export type RunnerActiveQuest = {
   id: string;
+  assignmentId: string;
   questTitle: string;
   giverName: string;
   escrowState: "LOCKED" | "IN_PROGRESS" | "PENDING_CONFIRMATION" | "RELEASED";
   status: RunnerActiveQuestStatus;
   reward: string;
   locationAddress: string;
+  workLocationLabel: string;
+  workLocationNote: string;
+  locationSharedAt: string | null;
   workStartedAt: string | null;
   workFinishedAt: string | null;
+  autoReleaseAt: string | null;
+  autoReleaseSecondsLeft: number;
   autoReleaseHoursLeft: number;
   ppGain: string;
+  giverRated: boolean;
+  runnerRated: boolean;
+  viewerHasRated: boolean;
+  bothRated: boolean;
 };
 
 export type RunnerOpenParty = {
@@ -195,7 +206,9 @@ export function createInitialRunnerWorkState(
   return Object.fromEntries(
     quests.map((quest) => [
       quest.id,
-      quest.workFinishedAt || quest.escrowState === "PENDING_CONFIRMATION" || quest.escrowState === "RELEASED"
+      quest.status === "PENDING_GIVER_CONFIRMATION"
+        ? "idle"
+        : quest.workFinishedAt || quest.escrowState === "PENDING_CONFIRMATION" || quest.escrowState === "RELEASED"
         ? "finished"
         : quest.workStartedAt
           ? "started"
@@ -208,7 +221,12 @@ export function createInitialRunnerCountdown(
   quests: RunnerActiveQuest[],
 ): RunnerCountdownMap {
   return Object.fromEntries(
-    quests.map((quest) => [quest.id, quest.autoReleaseHoursLeft * 3600]),
+    quests.map((quest) => [
+      quest.id,
+      quest.autoReleaseAt
+        ? Math.max(0, Math.ceil((new Date(quest.autoReleaseAt).getTime() - Date.now()) / 1000))
+        : quest.autoReleaseSecondsLeft,
+    ]),
   ) as RunnerCountdownMap;
 }
 

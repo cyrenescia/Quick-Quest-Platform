@@ -71,6 +71,7 @@ const ENDPOINTS = {
   },
   giverQuest: {
     list: joinApiUrl(API_BASE_URLS.stream, "/api/giver/quests"),
+    history: joinApiUrl(API_BASE_URLS.stream, "/api/giver/quests/history"),
     create: joinApiUrl(API_BASE_URLS.stream, "/api/giver/quests"),
     update: (questId: string) =>
       joinApiUrl(API_BASE_URLS.stream, `/api/giver/quests/${questId}`),
@@ -86,6 +87,12 @@ const ENDPOINTS = {
   giverAssignment: {
     accept: (assignmentId: string) =>
       joinApiUrl(API_BASE_URLS.stream, `/api/giver/assignments/${assignmentId}/accept`),
+    confirm: (assignmentId: string) =>
+      joinApiUrl(API_BASE_URLS.stream, `/api/giver/assignments/${assignmentId}/confirm`),
+    reject: (assignmentId: string) =>
+      joinApiUrl(API_BASE_URLS.stream, `/api/giver/assignments/${assignmentId}/reject`),
+    shareLocation: (assignmentId: string) =>
+      joinApiUrl(API_BASE_URLS.stream, `/api/giver/assignments/${assignmentId}/share-location`),
     requestRevision: (assignmentId: string) =>
       joinApiUrl(API_BASE_URLS.stream, `/api/giver/assignments/${assignmentId}/request-revision`),
     dispute: (assignmentId: string) =>
@@ -93,12 +100,16 @@ const ENDPOINTS = {
   },
   runnerQuest: {
     active: joinApiUrl(API_BASE_URLS.stream, "/api/runner/quests/active"),
+    history: joinApiUrl(API_BASE_URLS.stream, "/api/runner/quests/history"),
     take: (questId: string) =>
       joinApiUrl(API_BASE_URLS.stream, `/api/runner/quests/${questId}/take`),
     start: (questId: string) =>
       joinApiUrl(API_BASE_URLS.stream, `/api/runner/quests/${questId}/start`),
     finish: (questId: string) =>
       joinApiUrl(API_BASE_URLS.stream, `/api/runner/quests/${questId}/finish`),
+  },
+  rating: {
+    create: joinApiUrl(API_BASE_URLS.stream, "/api/ratings"),
   },
   dispute: {
     list: joinApiUrl(API_BASE_URLS.stream, "/api/disputes"),
@@ -108,6 +119,23 @@ const ENDPOINTS = {
       joinApiUrl(API_BASE_URLS.stream, `/api/disputes/${disputeId}/evidence`),
     mediate: (disputeId: string) =>
       joinApiUrl(API_BASE_URLS.stream, `/api/disputes/${disputeId}/mediate`),
+  },
+  admin: {
+    verifications: joinApiUrl(API_BASE_URLS.stream, "/api/admin/verifications"),
+    verificationDetail: (verificationId: string) =>
+      joinApiUrl(API_BASE_URLS.stream, `/api/admin/verifications/${verificationId}`),
+    approveVerification: (verificationId: string) =>
+      joinApiUrl(API_BASE_URLS.stream, `/api/admin/verifications/${verificationId}/approve`),
+    rejectVerification: (verificationId: string) =>
+      joinApiUrl(API_BASE_URLS.stream, `/api/admin/verifications/${verificationId}/reject`),
+    requestVerificationResubmission: (verificationId: string) =>
+      joinApiUrl(API_BASE_URLS.stream, `/api/admin/verifications/${verificationId}/resubmission`),
+    disputes: joinApiUrl(API_BASE_URLS.stream, "/api/admin/disputes"),
+    disputeDetail: (disputeId: string) =>
+      joinApiUrl(API_BASE_URLS.stream, `/api/admin/disputes/${disputeId}`),
+    mediateDispute: (disputeId: string) =>
+      joinApiUrl(API_BASE_URLS.stream, `/api/admin/disputes/${disputeId}/mediate`),
+    autoReleaseSweep: joinApiUrl(API_BASE_URLS.stream, "/api/admin/escrows/auto-release"),
   },
 };
 

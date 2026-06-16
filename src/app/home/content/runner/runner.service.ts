@@ -13,6 +13,7 @@ import type {
 } from "./runner";
 
 export const RUNNER_SUBVIEW_STORAGE_KEY_SEED = "nvrs-qqm-runner-subview-v1";
+const AUTO_RELEASE_TIMEOUT_HOURS = 24;
 
 type ApiEnvelope<T> = {
   success?: boolean;
@@ -32,7 +33,10 @@ type ApiQuest = {
   distance_km?: number | null;
   matching?: {
     active_radius_km?: number;
+    next_radius_km?: number;
     next_expand_in_seconds?: number;
+    matching_scope?: string;
+    within_match_radius?: boolean;
   };
   giver?: {
     fullname?: string;
@@ -61,10 +65,37 @@ type ApiRunnerAssignment = {
   assignment_status?: string;
   started_at?: string | null;
   finished_at?: string | null;
+  work_location?: ApiWorkLocation | null;
+  location_shared_at?: string | null;
+  rating_state?: ApiRatingState;
   escrow?: {
     escrow_state?: string;
   };
   quest?: ApiQuest;
+};
+
+type ApiWorkLocation = {
+  label?: string;
+  full_address?: string;
+  province?: string;
+  city?: string;
+  district?: string;
+  sub_district?: string;
+  postal_code?: string;
+  lat?: number | string | null;
+  lng?: number | string | null;
+  note?: string;
+  shared_at?: string | null;
+  shared_by?: string;
+};
+
+type ApiRatingState = {
+  rating_count?: number;
+  unique_rating_count?: number;
+  giver_rated?: boolean;
+  runner_rated?: boolean;
+  viewer_has_rated?: boolean;
+  both_rated?: boolean;
 };
 
 let runnerQuestFeedCache: RunnerQuestFeedItem[] = [];
@@ -90,6 +121,22 @@ function formatDate(value?: string | null): string {
   return Number.isFinite(date.getTime()) ? date.toLocaleString("id-ID") : "Baru saja";
 }
 
+function resolveAutoReleaseAt(finishedAt?: string | null, escrowStatus?: string): string | null {
+  if (!finishedAt || (escrowStatus ?? "").toLowerCase() === "released") return null;
+  const finishedDate = new Date(finishedAt);
+  if (!Number.isFinite(finishedDate.getTime())) return null;
+  return new Date(
+    finishedDate.getTime() + AUTO_RELEASE_TIMEOUT_HOURS * 60 * 60 * 1000,
+  ).toISOString();
+}
+
+function resolveSecondsUntil(value?: string | null): number {
+  if (!value) return 0;
+  const target = new Date(value).getTime();
+  if (!Number.isFinite(target)) return 0;
+  return Math.max(0, Math.ceil((target - Date.now()) / 1000));
+}
+
 function normalizeRunnerEscrow(
   status?: string,
   escrowStatus?: string,
@@ -111,7 +158,6 @@ function normalizeRunnerEscrow(
       return "IN_PROGRESS";
     case "finished":
     case "pending_review":
-    case "pending":
       return "PENDING_CONFIRMATION";
     case "completed":
       return "RELEASED";
@@ -129,6 +175,8 @@ function normalizeRunnerStatus(
   }
 
   switch ((status ?? "").toLowerCase()) {
+    case "pending":
+      return "PENDING_GIVER_CONFIRMATION";
     case "active":
     case "in_progress":
       return "IN_PROGRESS";
@@ -147,6 +195,9 @@ export function mapRunnerQuestFeedFromApi(quest: ApiQuest): RunnerQuestFeedItem 
   const maxRunner = Math.max(1, toNumber(quest.capacity?.max_runner, 1));
   const mode = (quest.mode ?? "solo").toLowerCase() === "group" ? "group" : "solo";
   const distance = toNumber(quest.distance_km, toNumber(quest.matching?.active_radius_km, 1));
+  const activeRadiusKm = toNumber(quest.matching?.active_radius_km, 1);
+  const nextRadiusKm = toNumber(quest.matching?.next_radius_km, activeRadiusKm + 1);
+  const nextExpandInSeconds = toNumber(quest.matching?.next_expand_in_seconds, 0);
 
   return {
     id: quest.id,
@@ -156,6 +207,14 @@ export function mapRunnerQuestFeedFromApi(quest: ApiQuest): RunnerQuestFeedItem 
     category: quest.category || (quest.skill_tags ?? []).join(" + ") || "General",
     reward: quest.reward_display || formatCurrency(quest.reward_amount),
     distanceKm: Number(distance.toFixed(1)),
+    activeRadiusKm: Number(activeRadiusKm.toFixed(1)),
+    nextRadiusKm: Number(nextRadiusKm.toFixed(1)),
+    nextExpandInSeconds,
+    matchingScope: quest.matching?.matching_scope || "global_fallback",
+    withinMatchRadius: quest.matching?.within_match_radius !== false,
+    coordinate: quest.location?.lat != null && quest.location?.lng != null
+      ? { lat: quest.location.lat, lng: quest.location.lng }
+      : null,
     locationLabel: quest.location?.label || quest.location?.sub_district || quest.location?.city || "Area terdekat",
     locationAddress: quest.location?.full_address || quest.location?.label || "Alamat quest belum tersedia",
     mode,
@@ -178,18 +237,37 @@ function mapRunnerActiveQuestFromApi(item: ApiRunnerAssignment): RunnerActiveQue
   const quest = item.quest ?? { id: "unknown", title: "Quest aktif" };
   const lifecycleStatus = item.assignment_status || quest.status;
   const escrowStatus = item.escrow?.escrow_state;
+  const autoReleaseAt = resolveAutoReleaseAt(item.finished_at, escrowStatus);
+  const autoReleaseSecondsLeft = resolveSecondsUntil(autoReleaseAt);
+  const workLocation = item.work_location;
+  const sharedAddress =
+    workLocation?.full_address ||
+    workLocation?.label ||
+    quest.location?.full_address ||
+    quest.location?.label ||
+    "Lokasi quest belum tersedia";
   return {
     id: quest.id,
+    assignmentId: item.assignment_id || "",
     questTitle: quest.title || "Quest aktif",
     giverName: quest.giver?.fullname || quest.giver?.username || "Verified Giver",
     escrowState: normalizeRunnerEscrow(lifecycleStatus, escrowStatus),
     status: normalizeRunnerStatus(lifecycleStatus, escrowStatus),
     reward: quest.reward_display || formatCurrency(quest.reward_amount),
-    locationAddress: quest.location?.full_address || quest.location?.label || "Lokasi quest belum tersedia",
+    locationAddress: sharedAddress,
+    workLocationLabel: workLocation?.label || workLocation?.sub_district || workLocation?.district || "",
+    workLocationNote: workLocation?.note || "",
+    locationSharedAt: item.location_shared_at ? formatDate(item.location_shared_at) : null,
     workStartedAt: item.started_at ? formatDate(item.started_at) : null,
     workFinishedAt: item.finished_at ? formatDate(item.finished_at) : null,
-    autoReleaseHoursLeft: item.assignment_status === "finished" && escrowStatus !== "released" ? 24 : 0,
+    autoReleaseAt,
+    autoReleaseSecondsLeft,
+    autoReleaseHoursLeft: autoReleaseSecondsLeft / 3600,
     ppGain: "+0 PP",
+    giverRated: item.rating_state?.giver_rated === true,
+    runnerRated: item.rating_state?.runner_rated === true,
+    viewerHasRated: item.rating_state?.viewer_has_rated === true,
+    bothRated: item.rating_state?.both_rated === true,
   };
 }
 
@@ -210,9 +288,15 @@ export function getCachedRunnerQuestFeed(): RunnerQuestFeedItem[] {
   return runnerQuestFeedCache.length > 0 ? runnerQuestFeedCache : runnerQuestFeedSeed;
 }
 
-export async function takeRunnerQuestFromApi(questId: string) {
+export async function takeRunnerQuestFromApi(questId: string, coords?: RunnerRawCoords) {
+  const url = new URL(GlobalEndpoint().runnerQuest.take(questId));
+  if (coords) {
+    url.searchParams.set("runner_lat", `${coords.lat}`);
+    url.searchParams.set("runner_lng", `${coords.lng}`);
+  }
+
   return postJson<Record<string, never>, ApiEnvelope<unknown>>(
-    GlobalEndpoint().runnerQuest.take(questId),
+    url.toString(),
     {},
   );
 }
@@ -455,29 +539,49 @@ export const runnerFocusInsight = {
 export const runnerActiveQuests: RunnerActiveQuest[] = [
   {
     id: "QST-7821",
+    assignmentId: "ASN-SEED-7821",
     questTitle: "Bersih-bersih & Rapikan Kantor Lantai 3",
     giverName: "PT. Sentra Solusi",
     escrowState: "IN_PROGRESS",
     status: "IN_PROGRESS",
     reward: "Rp 120.000",
     locationAddress: "Gedung Sentra Solusi, Jl. Sudirman Kav. 22, Jakarta Selatan",
+    workLocationLabel: "Gedung Sentra Solusi",
+    workLocationNote: "Masuk lewat lobby utama dan temui security.",
+    locationSharedAt: "14 Apr 2026, 08:35",
     workStartedAt: "14 Apr 2026, 08:45",
     workFinishedAt: null,
+    autoReleaseAt: null,
+    autoReleaseSecondsLeft: 0,
     autoReleaseHoursLeft: 22,
     ppGain: "+180 PP",
+    giverRated: false,
+    runnerRated: false,
+    viewerHasRated: false,
+    bothRated: false,
   },
   {
     id: "QST-7744",
+    assignmentId: "ASN-SEED-7744",
     questTitle: "Install & Konfigurasi WiFi Kantor",
     giverName: "CV. Nusantara Digital",
     escrowState: "PENDING_CONFIRMATION",
     status: "PENDING_CONFIRMATION",
     reward: "Rp 350.000",
     locationAddress: "Ruko Nusantara, Jl. Gatot Subroto No. 7, Tangerang",
+    workLocationLabel: "Ruko Nusantara",
+    workLocationNote: "",
+    locationSharedAt: "13 Apr 2026, 12:45",
     workStartedAt: "13 Apr 2026, 13:00",
     workFinishedAt: "13 Apr 2026, 16:30",
+    autoReleaseAt: "2026-04-14T09:30:00.000Z",
+    autoReleaseSecondsLeft: 0,
     autoReleaseHoursLeft: 6,
     ppGain: "+420 PP",
+    giverRated: false,
+    runnerRated: false,
+    viewerHasRated: false,
+    bothRated: false,
   },
 ];
 
@@ -517,6 +621,12 @@ export type RunnerQuestFeedItem = {
   category: string;
   reward: string;
   distanceKm: number;
+  activeRadiusKm?: number;
+  nextRadiusKm?: number;
+  nextExpandInSeconds?: number;
+  matchingScope?: string;
+  withinMatchRadius?: boolean;
+  coordinate?: RunnerRawCoords | null;
   locationLabel: string;
   locationAddress: string;
   mode: "solo" | "group";

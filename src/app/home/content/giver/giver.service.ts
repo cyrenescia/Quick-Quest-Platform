@@ -476,6 +476,15 @@ type ApiQuestCapacity = {
   current_runner_count?: number | null;
 };
 
+type ApiRatingState = {
+  rating_count?: number;
+  unique_rating_count?: number;
+  giver_rated?: boolean;
+  runner_rated?: boolean;
+  viewer_has_rated?: boolean;
+  both_rated?: boolean;
+};
+
 export type ApiGiverQuest = {
   id?: string;
   quest_id?: string;
@@ -508,6 +517,7 @@ export type ApiGiverQuest = {
     payment_method?: string;
     payment_reference?: string;
   };
+  rating_state?: ApiRatingState;
   created_at?: string | null;
   published_at?: string | null;
   starts_at?: string | null;
@@ -516,14 +526,22 @@ export type ApiGiverQuest = {
 
 export type ApiGiverAssignment = {
   id: string;
+  quest_id?: string;
+  runner_auth_user_id?: string;
   assignment_status?: string;
   joined_at?: string | null;
   started_at?: string | null;
   finished_at?: string | null;
+  work_location?: ApiQuestLocation | null;
+  location_shared_at?: string | null;
   runner?: {
+    auth_user_id?: string;
     fullname?: string;
     username?: string;
+    email?: string;
+    phone?: string;
   };
+  rating_state?: ApiRatingState;
 };
 
 export type CreateGiverQuestApiPayload = {
@@ -659,6 +677,10 @@ export function mapGiverQuestFromApi(quest: ApiGiverQuest): GiverBroadcastQuest 
     fullAddress,
     estimatedCandidates: Math.max(1, 24 - currentRunnerCount),
     escrowState: mapGiverEscrowState(quest.escrow?.escrow_state),
+    giverRated: quest.rating_state?.giver_rated === true,
+    runnerRated: quest.rating_state?.runner_rated === true,
+    viewerHasRated: quest.rating_state?.viewer_has_rated === true,
+    bothRated: quest.rating_state?.both_rated === true,
   };
 }
 
@@ -732,6 +754,27 @@ export async function fetchGiverQuestAssignmentsFromApi(questId: string): Promis
 export async function acceptGiverAssignmentFromApi(assignmentId: string) {
   return postJson<Record<string, never>, ApiEnvelope<unknown>>(
     GlobalEndpoint().giverAssignment.accept(assignmentId),
+    {},
+  );
+}
+
+export async function confirmGiverAssignmentCandidateFromApi(assignmentId: string) {
+  return postJson<Record<string, never>, ApiEnvelope<unknown>>(
+    GlobalEndpoint().giverAssignment.confirm(assignmentId),
+    {},
+  );
+}
+
+export async function rejectGiverAssignmentCandidateFromApi(assignmentId: string) {
+  return postJson<Record<string, never>, ApiEnvelope<unknown>>(
+    GlobalEndpoint().giverAssignment.reject(assignmentId),
+    {},
+  );
+}
+
+export async function shareGiverAssignmentLocationFromApi(assignmentId: string) {
+  return postJson<Record<string, never>, ApiEnvelope<unknown>>(
+    GlobalEndpoint().giverAssignment.shareLocation(assignmentId),
     {},
   );
 }

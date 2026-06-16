@@ -4,6 +4,7 @@ import {
   createGiverQuestFromApi,
   deleteGiverQuestDraftFromApi,
   acceptGiverAssignmentFromApi,
+  confirmGiverAssignmentCandidateFromApi,
   disputeGiverAssignmentFromApi,
   fetchGiverQuestsFromApi,
   fetchGiverQuestAssignmentsFromApi,
@@ -22,7 +23,9 @@ import {
   QQM_PLATFORM_FEE_PERCENT,
   lockGiverQuestEscrowFromApi,
   publishGiverQuestFromApi,
+  rejectGiverAssignmentCandidateFromApi,
   requestGiverAssignmentRevisionFromApi,
+  shareGiverAssignmentLocationFromApi,
   updateGiverQuestDraftFromApi,
   type ApiGiverAssignment,
   type EditorQuestType,
@@ -65,14 +68,22 @@ export type GiverBroadcastQuest = {
   fullAddress?: string;
   estimatedCandidates: number;
   escrowState: "UNPAID" | "LOCKED" | "IN_PROGRESS" | "PENDING_CONFIRMATION" | "RELEASED" | "DISPUTED" | "REFUND";
+  giverRated?: boolean;
+  runnerRated?: boolean;
+  viewerHasRated?: boolean;
+  bothRated?: boolean;
 };
 
 export type GiverDraftQuest = GiverBroadcastQuest;
 
-export type GiverCandidateStatus = "Ready" | "On Quest" | "Standby";
+export type GiverCandidateStatus = "Applied" | "Accepted" | "Rejected" | "Ready" | "On Quest" | "Standby";
 
 export type GiverCandidate = {
   id: string;
+  assignmentId?: string;
+  questId?: string;
+  questTitle?: string;
+  appliedAt?: string;
   name: string;
   distanceKm: number;
   etaMinutes: number;
@@ -133,9 +144,17 @@ export type GiverViewText = GiverViewCopy;
 
 export type GiverAssignmentAuditItem = {
   id: string;
+  questId: string;
+  questTitle: string;
   status: string;
   runnerName: string;
   finishedAt: string;
+  locationSharedAt?: string;
+  hasSharedLocation?: boolean;
+  giverRated?: boolean;
+  runnerRated?: boolean;
+  viewerHasRated?: boolean;
+  bothRated?: boolean;
 };
 
 export const giverBroadcastFilters = [...giverBroadcastFiltersSeed];
@@ -164,6 +183,9 @@ export function resolveGiverEscrowStateClass(
 export function resolveGiverCandidateStatusClass(
   status: GiverCandidate["status"],
 ): string {
+  if (status === "Applied") return "bg-[#FEF3C7] text-[#92400E]";
+  if (status === "Accepted") return "bg-[#DCFCE7] text-[#166534]";
+  if (status === "Rejected") return "bg-[#FECACA] text-[#991B1B]";
   if (status === "Ready") return "bg-[#DCFCE7] text-[#166534]";
   if (status === "On Quest") return "bg-[#DBEAFE] text-[#1D4ED8]";
   return "bg-[#FEF3C7] text-[#92400E]";
@@ -314,17 +336,51 @@ export {
 export function useGiverDashboardVM() {
   const [quests, setQuests] = useState<GiverBroadcastQuest[]>(giverBroadcastQuests);
   const [assignmentsByQuest, setAssignmentsByQuest] = useState<Record<string, GiverAssignmentAuditItem[]>>({});
+  const [candidates, setCandidates] = useState<GiverCandidate[]>(giverCandidates);
   const [auditActionId, setAuditActionId] = useState("");
+  const [candidateActionId, setCandidateActionId] = useState("");
+  const [locationActionId, setLocationActionId] = useState("");
   const [draftActionId, setDraftActionId] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const [errorMessage, setErrorMessage] = useState("");
 
-  function mapAssignment(item: ApiGiverAssignment): GiverAssignmentAuditItem {
+  function mapAssignment(item: ApiGiverAssignment, quest: GiverBroadcastQuest): GiverAssignmentAuditItem {
     return {
       id: item.id,
+      questId: quest.id,
+      questTitle: quest.title,
       status: item.assignment_status ?? "unknown",
       runnerName: item.runner?.fullname || item.runner?.username || "Runner",
       finishedAt: item.finished_at ? new Date(item.finished_at).toLocaleString("id-ID") : "-",
+      locationSharedAt: item.location_shared_at
+        ? new Date(item.location_shared_at).toLocaleString("id-ID")
+        : "",
+      hasSharedLocation: Boolean(item.location_shared_at || item.work_location),
+      giverRated: item.rating_state?.giver_rated === true,
+      runnerRated: item.rating_state?.runner_rated === true,
+      viewerHasRated: item.rating_state?.viewer_has_rated === true,
+      bothRated: item.rating_state?.both_rated === true,
+    };
+  }
+
+  function mapCandidate(item: ApiGiverAssignment, quest: GiverBroadcastQuest): GiverCandidate {
+    const appliedAt = item.joined_at ? new Date(item.joined_at).toLocaleString("id-ID") : "";
+    const seedNumber = Math.max(1, item.id.split("").reduce((sum, char) => sum + char.charCodeAt(0), 0));
+    return {
+      id: item.id,
+      assignmentId: item.id,
+      questId: quest.id,
+      questTitle: quest.title,
+      appliedAt,
+      name: item.runner?.fullname || item.runner?.username || "Runner",
+      distanceKm: Number((0.6 + (seedNumber % 18) / 10).toFixed(1)),
+      etaMinutes: 5 + (seedNumber % 18),
+      skill: quest.skillTag,
+      matchScore: Math.max(72, Math.min(96, 96 - (seedNumber % 20))),
+      completionRate: "Belum live",
+      disputeRatio: "Belum live",
+      reliabilityBadge: "Candidate",
+      status: "Applied",
     };
   }
 
@@ -339,7 +395,7 @@ export function useGiverDashboardVM() {
       const auditableQuests = resolvedQuests.filter(
         (quest) =>
           !quest.isPrivateDraft &&
-          quest.escrowState !== "RELEASED" &&
+          quest.bothRated !== true &&
           quest.escrowState !== "DISPUTED" &&
           quest.escrowState !== "REFUND",
       );
@@ -347,16 +403,23 @@ export function useGiverDashboardVM() {
         auditableQuests.map(async (quest) => {
           try {
             const assignments = await fetchGiverQuestAssignmentsFromApi(quest.id);
-            return [quest.id, assignments.map(mapAssignment)] as const;
+            return [quest.id, assignments.map((assignment) => mapAssignment(assignment, quest)), assignments, quest] as const;
           } catch {
-            return [quest.id, []] as const;
+            return [quest.id, [] as GiverAssignmentAuditItem[], [] as ApiGiverAssignment[], quest] as const;
           }
         }),
       );
-      setAssignmentsByQuest(Object.fromEntries(assignmentPairs));
+      setAssignmentsByQuest(Object.fromEntries(assignmentPairs.map(([questId, mapped]) => [questId, mapped])));
+      const liveCandidates = assignmentPairs.flatMap(([, , rawAssignments, quest]) =>
+        rawAssignments
+          .filter((assignment) => (assignment.assignment_status ?? "").toLowerCase() === "pending")
+          .map((assignment) => mapCandidate(assignment, quest)),
+      );
+      setCandidates(liveCandidates.length > 0 ? liveCandidates : giverCandidates);
     } catch (error) {
       setErrorMessage(error instanceof Error ? error.message : "Gagal mengambil quest giver.");
       setQuests(giverBroadcastQuests);
+      setCandidates(giverCandidates);
     } finally {
       setIsLoading(false);
     }
@@ -397,6 +460,54 @@ export function useGiverDashboardVM() {
     }
   }, [refresh]);
 
+  const confirmCandidate = useCallback(async (assignmentId: string): Promise<boolean> => {
+    if (!assignmentId) return false;
+    setCandidateActionId(assignmentId);
+    setErrorMessage("");
+    try {
+      await confirmGiverAssignmentCandidateFromApi(assignmentId);
+      await refresh();
+      return true;
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : "Gagal konfirmasi kandidat.");
+      return false;
+    } finally {
+      setCandidateActionId("");
+    }
+  }, [refresh]);
+
+  const rejectCandidate = useCallback(async (assignmentId: string): Promise<boolean> => {
+    if (!assignmentId) return false;
+    setCandidateActionId(assignmentId);
+    setErrorMessage("");
+    try {
+      await rejectGiverAssignmentCandidateFromApi(assignmentId);
+      await refresh();
+      return true;
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : "Gagal menolak kandidat.");
+      return false;
+    } finally {
+      setCandidateActionId("");
+    }
+  }, [refresh]);
+
+  const shareAssignmentLocation = useCallback(async (assignmentId: string): Promise<boolean> => {
+    if (!assignmentId) return false;
+    setLocationActionId(assignmentId);
+    setErrorMessage("");
+    try {
+      await shareGiverAssignmentLocationFromApi(assignmentId);
+      await refresh();
+      return true;
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : "Gagal share lokasi detail.");
+      return false;
+    } finally {
+      setLocationActionId("");
+    }
+  }, [refresh]);
+
   useEffect(() => {
     void refresh();
   }, [refresh]);
@@ -404,15 +515,21 @@ export function useGiverDashboardVM() {
   return {
     quests,
     draftQuests: quests.filter((quest) => quest.isPrivateDraft),
-    publishedQuests: quests.filter((quest) => !quest.isPrivateDraft),
+    publishedQuests: quests.filter((quest) => !quest.isPrivateDraft && quest.bothRated !== true),
     assignmentsByQuest,
+    candidates,
     auditActionId,
+    candidateActionId,
+    locationActionId,
     draftActionId,
     isLoading,
     errorMessage,
     refresh,
     deleteDraft,
     auditAssignment,
+    confirmCandidate,
+    rejectCandidate,
+    shareAssignmentLocation,
   };
 }
 

@@ -3,14 +3,13 @@ import { createRoot } from "react-dom/client";
 
 import { AppRoot } from "./app/app.tsx"; // ClientSide
 import { AdministratorRoot } from "./admin/app.tsx"; // AdminSide
-import { AdminRouteProvider } from "./admin/route.context.tsx";
-import { RouteProvider } from "./app/route.context.tsx";
+import {
+  ADMIN_ROUTE_VIEW_STORAGE_KEY,
+  AdminRouteProvider,
+} from "./admin/route.context.tsx";
+import { ROUTE_VIEW_STORAGE_KEY, RouteProvider } from "./app/route.context.tsx";
 import { AuthProvider } from "./app/auth.context.tsx";
 import { initializeTheme } from "./app/global.theme";
-import GlobalEndpoint, {
-  clearAccessToken,
-  requestJson,
-} from "./app/global.service";
 import "./index.css";
 
 // Inisialisasi theme secara global SEBELUM render apapun untuk mencegah reverting ke default DaisyUI
@@ -51,6 +50,19 @@ function persistAdminRootState(): void {
 
   window.localStorage.setItem(ROOT_MODE_STORAGE_KEY, "admin");
   window.localStorage.setItem(ROOT_PAGE_STORAGE_KEY, ADMIN_ROOT_PAGE);
+  window.localStorage.setItem(ADMIN_ROUTE_VIEW_STORAGE_KEY, "login");
+}
+
+function persistUserLoginRootState(): void {
+  if (typeof window === "undefined") {
+    return;
+  }
+
+  window.sessionStorage.clear();
+  window.localStorage.removeItem(ROOT_MODE_STORAGE_KEY);
+  window.localStorage.removeItem(ROOT_PAGE_STORAGE_KEY);
+  window.localStorage.removeItem(ADMIN_ROUTE_VIEW_STORAGE_KEY);
+  window.localStorage.setItem(ROUTE_VIEW_STORAGE_KEY, "login");
 }
 
 function RootShell() {
@@ -58,30 +70,25 @@ function RootShell() {
 
   useEffect(() => {
     function handleEnterAdminPanel() {
-      void (async () => {
-        try {
-          await requestJson(GlobalEndpoint().auth.logout, { method: "POST" });
-        } catch {
-          // Best effort only. Admin-side entry tetap lanjut walau logout backend gagal.
-        }
+      persistAdminRootState();
+      setRootMode("admin");
+    }
 
-        clearAccessToken();
-
-        if (typeof window !== "undefined") {
-          window.sessionStorage.clear();
-          window.localStorage.clear();
-          persistAdminRootState();
-        }
-
-        setRootMode("admin");
-      })();
+    function handleExitAdminPanel() {
+      persistUserLoginRootState();
+      setRootMode("app");
     }
 
     window.addEventListener("qqm-enter-admin-panel", handleEnterAdminPanel);
+    window.addEventListener("qqm-exit-admin-panel", handleExitAdminPanel);
     return () => {
       window.removeEventListener(
         "qqm-enter-admin-panel",
         handleEnterAdminPanel,
+      );
+      window.removeEventListener(
+        "qqm-exit-admin-panel",
+        handleExitAdminPanel,
       );
     };
   }, []);

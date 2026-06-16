@@ -29,15 +29,18 @@ export function RunnerActiveQuestPage({ onBack }: { onBack: () => void }) {
   const [errorMessage, setErrorMessage] = useState("");
   const [ratingTarget, setRatingTarget] = useState<RatingTarget | null>(null);
 
+  const refreshActiveQuests = (isMounted?: () => boolean) =>
+    fetchRunnerActiveQuestLive().then((items) => {
+      if (items.length === 0 || isMounted?.() === false) return items;
+      setQuests(items);
+      setWorkState(createInitialRunnerWorkState(items));
+      setCountdown(createInitialRunnerCountdown(items));
+      return items;
+    });
+
   useEffect(() => {
     let mounted = true;
-    fetchRunnerActiveQuestLive()
-      .then((items) => {
-        if (!mounted || items.length === 0) return;
-        setQuests(items);
-        setWorkState(createInitialRunnerWorkState(items));
-        setCountdown(createInitialRunnerCountdown(items));
-      })
+    refreshActiveQuests(() => mounted)
       .catch((error) =>
         setErrorMessage(error instanceof Error ? error.message : "Gagal hydrate active quest."),
       );
@@ -85,6 +88,9 @@ export function RunnerActiveQuestPage({ onBack }: { onBack: () => void }) {
           const urgency = resolveRunnerAutoReleaseUrgency(secs);
           const isPendingVerification = state === "finished" && quest.escrowState === "PENDING_CONFIRMATION";
           const isEscrowReleased = quest.escrowState === "RELEASED";
+          const isWaitingGiverConfirmation = quest.status === "PENDING_GIVER_CONFIRMATION";
+          const isWaitingLocationShare =
+            !quest.locationSharedAt && quest.status === "HEADING_TO_LOCATION";
           const escrowIndex = resolveRunnerEscrowFlowIndex(
             vm.escrowFlow,
             quest.escrowState,
@@ -116,6 +122,11 @@ export function RunnerActiveQuestPage({ onBack }: { onBack: () => void }) {
                   <span className="rounded-[8px] bg-success/10 px-2 py-0.5 text-[11px] font-bold text-success">
                     {quest.reward}
                   </span>
+                  {isWaitingGiverConfirmation ? (
+                    <span className="rounded-[8px] bg-warning/10 px-2 py-0.5 text-[11px] font-bold text-warning">
+                      Menunggu Giver
+                    </span>
+                  ) : null}
                 </div>
               </div>
 
@@ -156,24 +167,48 @@ export function RunnerActiveQuestPage({ onBack }: { onBack: () => void }) {
                     Auto-Release
                   </p>
                   <p className="mt-0.5 font-mono font-bold tracking-wider text-base-content">
-                    {formatRunnerCountdown(secs)}
+                    {isWaitingGiverConfirmation ? "--:--:--" : formatRunnerCountdown(secs)}
                   </p>
                 </div>
               </div>
 
               <div className="mt-3 rounded-[9px] border border-base-300/70 bg-base-200/40 px-3 py-2">
                 <p className="text-[10px] font-semibold text-base-content/55 uppercase">
-                  Lokasi
+                  Lokasi Detail Giver
                 </p>
                 <p className="mt-0.5 text-xs text-base-content/80">
                   {quest.locationAddress}
                 </p>
+                {quest.workLocationLabel ? (
+                  <p className="mt-1 text-[11px] font-semibold text-base-content/60">
+                    {quest.workLocationLabel}
+                  </p>
+                ) : null}
+                {quest.workLocationNote ? (
+                  <p className="mt-1 text-[11px] text-base-content/60">
+                    {quest.workLocationNote}
+                  </p>
+                ) : null}
+                {quest.locationSharedAt ? (
+                  <p className="mt-1 text-[10px] font-bold uppercase tracking-[0.08em] text-info">
+                    Dibagikan Giver: {quest.locationSharedAt}
+                  </p>
+                ) : (
+                  <p className="mt-1 text-[10px] font-bold uppercase tracking-[0.08em] text-warning">
+                    Menunggu Giver share lokasi detail
+                  </p>
+                )}
               </div>
 
               <div className="mt-4 grid grid-cols-2 gap-2">
                 <button
                   type="button"
-                  disabled={state !== "idle" || actionQuestId === quest.id}
+                  disabled={
+                    isWaitingGiverConfirmation ||
+                    isWaitingLocationShare ||
+                    state !== "idle" ||
+                    actionQuestId === quest.id
+                  }
                   onClick={() => {
                     setActionQuestId(quest.id);
                     startRunnerActiveQuestLive(quest.id)
@@ -185,7 +220,15 @@ export function RunnerActiveQuestPage({ onBack }: { onBack: () => void }) {
                   }}
                   className="btn h-10 min-h-10 rounded-[9px] border-none bg-info text-info-content text-xs font-bold disabled:opacity-40"
                 >
-                  {actionQuestId === quest.id ? "Memulai..." : state === "started" ? "Sedang Kerja..." : "Mulai Kerja"}
+                  {isWaitingGiverConfirmation
+                    ? "Menunggu Konfirmasi"
+                    : isWaitingLocationShare
+                      ? "Menunggu Lokasi"
+                      : actionQuestId === quest.id
+                      ? "Memulai..."
+                      : state === "started"
+                        ? "Sedang Kerja..."
+                        : "Mulai Kerja"}
                 </button>
                 <button
                   type="button"
@@ -193,23 +236,7 @@ export function RunnerActiveQuestPage({ onBack }: { onBack: () => void }) {
                   onClick={() => {
                     setActionQuestId(quest.id);
                     finishRunnerActiveQuestLive(quest.id)
-                      .then(() => {
-                        setWorkState((prev) => ({ ...prev, [quest.id]: "finished" }));
-                        setQuests((prev) =>
-                          prev.map((item) =>
-                            item.id === quest.id
-                              ? {
-                                  ...item,
-                                  escrowState: "PENDING_CONFIRMATION",
-                                  status: "PENDING_CONFIRMATION",
-                                  workFinishedAt: new Date().toLocaleString("id-ID"),
-                                  autoReleaseHoursLeft: 24,
-                                }
-                              : item,
-                          ),
-                        );
-                        setCountdown((prev) => ({ ...prev, [quest.id]: 24 * 3600 }));
-                      })
+                      .then(() => refreshActiveQuests())
                       .catch((error) =>
                         setErrorMessage(error instanceof Error ? error.message : "Gagal selesai kerja."),
                       )
@@ -227,7 +254,7 @@ export function RunnerActiveQuestPage({ onBack }: { onBack: () => void }) {
                 </button>
               </div>
 
-              {isEscrowReleased ? (
+              {isEscrowReleased && !quest.viewerHasRated ? (
                 <button
                   type="button"
                   onClick={() =>
@@ -236,11 +263,20 @@ export function RunnerActiveQuestPage({ onBack }: { onBack: () => void }) {
                       role: "giver",
                       questTitle: quest.questTitle,
                       questId: quest.id,
+                      assignmentId: quest.assignmentId,
                     })
                   }
                   className="btn mt-3 h-10 min-h-10 w-full rounded-[9px] border-none bg-primary text-xs font-bold text-primary-content"
                 >
                   Beri Rating ke Giver
+                </button>
+              ) : isEscrowReleased ? (
+                <button
+                  type="button"
+                  disabled
+                  className="btn mt-3 h-10 min-h-10 w-full rounded-[9px] border-none bg-base-200 text-xs font-bold text-base-content/55"
+                >
+                  {quest.bothRated ? "Quest Masuk Riwayat" : "Rating Terkirim"}
                 </button>
               ) : null}
             </Surface>
@@ -253,6 +289,9 @@ export function RunnerActiveQuestPage({ onBack }: { onBack: () => void }) {
         <RatingModal
           isOpen={true}
           target={ratingTarget}
+          onSubmit={() => {
+            void refreshActiveQuests();
+          }}
           onClose={() => setRatingTarget(null)}
         />
       )}

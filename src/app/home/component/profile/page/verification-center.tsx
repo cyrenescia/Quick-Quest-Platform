@@ -71,6 +71,37 @@ function canSubmitVerification(
   return hasIdentity && requiredReady;
 }
 
+function buildDraftRequestBody(draft: ProfileVerificationDraft) {
+  return {
+    full_legal_name: draft.fullLegalName || undefined,
+    nik: draft.nik || undefined,
+    birth_place: draft.birthPlace || undefined,
+    birth_date: draft.birthDate || undefined,
+    gender: draft.gender || undefined,
+    occupation: draft.occupation || undefined,
+    province: draft.province || undefined,
+    city: draft.city || undefined,
+    district: draft.district || undefined,
+    sub_district: draft.subDistrict || undefined,
+    postal_code: draft.postalCode || undefined,
+    full_address: draft.fullAddress || undefined,
+    domicile_same_as_ktp: draft.domicileSameAsKtp,
+  };
+}
+
+function readFileAsDataUrl(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      resolve(typeof reader.result === "string" ? reader.result : "");
+    };
+    reader.onerror = () => {
+      reject(new Error("File dokumen gagal dibaca dari browser."));
+    };
+    reader.readAsDataURL(file);
+  });
+}
+
 export function VerificationCenter({
   profile,
   verificationState,
@@ -159,22 +190,7 @@ export function VerificationCenter({
     setIsSavingDraft(true);
     setApiError(null);
     try {
-      const draft = verificationState.draft;
-      const data = await saveDraftToApi({
-        full_legal_name: draft.fullLegalName || undefined,
-        nik: draft.nik || undefined,
-        birth_place: draft.birthPlace || undefined,
-        birth_date: draft.birthDate || undefined,
-        gender: draft.gender || undefined,
-        occupation: draft.occupation || undefined,
-        province: draft.province || undefined,
-        city: draft.city || undefined,
-        district: draft.district || undefined,
-        sub_district: draft.subDistrict || undefined,
-        postal_code: draft.postalCode || undefined,
-        full_address: draft.fullAddress || undefined,
-        domicile_same_as_ktp: draft.domicileSameAsKtp,
-      });
+      const data = await saveDraftToApi(buildDraftRequestBody(verificationState.draft));
       onChange(mapVerificationApiToState(data, profile));
     } catch (error) {
       setApiError(getProfileServiceErrorMessage(error, "Gagal menyimpan draft ke backend."));
@@ -185,20 +201,30 @@ export function VerificationCenter({
 
   async function handleRegisterDocument(
     documentType: ProfileVerificationDocumentDraft["type"],
-    fileName: string,
+    file: File | undefined,
   ) {
+    const fileName = file?.name ?? "";
     if (!fileName) return;
 
     setUploadingDocType(documentType);
     setApiError(null);
     try {
+      const fileUrl = file ? await readFileAsDataUrl(file) : "";
       const data = await saveDocumentToApi({
         document_type: documentType,
         file_key: fileName,
+        file_url: fileUrl || undefined,
+        mime_type: file?.type || undefined,
+        file_size: file?.size,
         validation_status: "uploaded",
         is_primary: documentType === "ktp_front",
       });
-      onChange(mapVerificationApiToState(data, profile));
+      const mappedState = mapVerificationApiToState(data, profile);
+      onChange({
+        ...mappedState,
+        draft: verificationState.draft,
+        stage: inferStageFromDraft(verificationState.draft, mappedState.documents),
+      });
     } catch (error) {
       setApiError(
         getProfileServiceErrorMessage(error, "Gagal mendaftarkan dokumen ke backend."),
@@ -214,6 +240,8 @@ export function VerificationCenter({
     setIsSubmitting(true);
     setApiError(null);
     try {
+      await saveDraftToApi(buildDraftRequestBody(verificationState.draft));
+
       const isResubmit =
         verificationState.status === "rejected" ||
         verificationState.status === "resubmission_required";
@@ -378,7 +406,7 @@ export function VerificationCenter({
                     <option value="">Pilih gender legal</option>
                     <option value="male">Male</option>
                     <option value="female">Female</option>
-                    <option value="other">Other</option>
+                    <option value="other">Others</option>
                   </select>
                 </label>
 
@@ -537,7 +565,7 @@ export function VerificationCenter({
                       onChange={(event) =>
                         handleRegisterDocument(
                           documentItem.type,
-                          event.target.files?.[0]?.name ?? "",
+                          event.target.files?.[0],
                         )
                       }
                       disabled={

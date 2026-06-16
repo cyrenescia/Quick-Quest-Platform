@@ -39,7 +39,7 @@ export function useRunnerQuestFeedVM() {
       await takeRunnerQuestLive(questId);
       await refresh();
     } catch (error) {
-      setErrorMessage(error instanceof Error ? error.message : "Gagal mengambil quest.");
+      setErrorMessage(error instanceof Error ? error.message : "Gagal mengirim lamaran quest.");
       throw error;
     } finally {
       setActionQuestId("");
@@ -64,6 +64,57 @@ export function resolveQuestFeedModeClass(mode: RunnerQuestFeedItem["mode"]) {
   return mode === "group"
     ? "bg-secondary/10 text-secondary"
     : "bg-info/10 text-info";
+}
+
+export function formatQuestFeedExpandCountdown(seconds?: number): string {
+  const safeSeconds = Math.max(0, Number.isFinite(seconds ?? 0) ? seconds ?? 0 : 0);
+  if (safeSeconds <= 0) {
+    return "radius maksimal aktif";
+  }
+
+  const minutes = Math.floor(safeSeconds / 60);
+  const secs = safeSeconds % 60;
+  if (minutes <= 0) {
+    return `${secs} detik lagi`;
+  }
+  return `${minutes} menit ${secs.toString().padStart(2, "0")} detik lagi`;
+}
+
+export function resolveQuestFeedMatchReason(quest: RunnerQuestFeedItem): string {
+  const activeRadius = quest.activeRadiusKm ?? Math.max(1, quest.distanceKm);
+  const nextRadius = quest.nextRadiusKm ?? activeRadius + 1;
+  const distanceText = Number.isFinite(quest.distanceKm)
+    ? `${quest.distanceKm} km dari lokasimu`
+    : "jarak belum tersedia";
+
+  if (quest.matchingScope === "coordinate_radius") {
+    return `Masuk radius ${activeRadius} km, ${distanceText}. Radius berikutnya ${nextRadius} km dalam ${formatQuestFeedExpandCountdown(quest.nextExpandInSeconds)}.`;
+  }
+
+  if (quest.matchingScope?.startsWith("same_")) {
+    return `Match area profil runner. Radius aktif ${activeRadius} km, expand berikutnya ${nextRadius} km dalam ${formatQuestFeedExpandCountdown(quest.nextExpandInSeconds)}.`;
+  }
+
+  return `Fallback broadcast aktif. Radius ${activeRadius} km, expand berikutnya ${nextRadius} km dalam ${formatQuestFeedExpandCountdown(quest.nextExpandInSeconds)}.`;
+}
+
+export function canTakeQuestFromFeed(quest: RunnerQuestFeedItem): boolean {
+  return quest.withinMatchRadius !== false;
+}
+
+export function resolveQuestFeedActionLabel(
+  quest: RunnerQuestFeedItem,
+  isWorking: boolean,
+): string {
+  if (isWorking) {
+    return "Mengirim lamaran...";
+  }
+
+  if (!canTakeQuestFromFeed(quest)) {
+    return "Di luar radius";
+  }
+
+  return quest.mode === "group" ? "Apply Group Quest" : "Apply Quest";
 }
 
 export function resolveInitialRunnerQuestFeedSubView(): RunnerQuestFeedSubView {

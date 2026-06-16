@@ -175,7 +175,7 @@ export function RunnerQuestFeedDetailPage({
                     onClick={onJoinPartyLobby}
                     className="btn h-11 min-h-11 rounded-[10px] border-none bg-secondary text-secondary-content font-bold"
                   >
-                    Join Group Lobby
+                    Apply Group Quest
                   </button>
                 ) : (
                   <button
@@ -183,7 +183,7 @@ export function RunnerQuestFeedDetailPage({
                     onClick={onTakeQuest}
                     className="btn h-11 min-h-11 rounded-[10px] border-none bg-primary text-primary-content font-bold"
                   >
-                    Ambil Quest Ini
+                    Apply Quest Ini
                   </button>
                 )}
               </div>

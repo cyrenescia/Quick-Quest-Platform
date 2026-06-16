@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { ArrowLeftIcon } from "../../../home.icons";
 import { cn, Surface } from "../../../home.ui";
-import { giverCandidates } from "../giver";
+import { giverCandidates, type GiverCandidate } from "../giver";
 
 type ReviewMode = "SELECTION" | "AUDIT";
 
@@ -131,14 +131,23 @@ function AuditPanel({ onDecide }: { onDecide: (d: AuditDecision) => void }) {
 
 export function CandidateReview({
   candidateId,
+  candidate: candidateOverride,
+  isWorking = false,
+  onConfirm,
+  onReject,
   onBack,
   mode = "SELECTION",
 }: {
   candidateId: string;
+  candidate?: GiverCandidate;
+  isWorking?: boolean;
+  onConfirm?: (assignmentId: string) => void | Promise<void>;
+  onReject?: (assignmentId: string) => void | Promise<void>;
   onBack: () => void;
   mode?: ReviewMode;
 }) {
-  const candidate = giverCandidates.find((c) => c.id === candidateId) || giverCandidates[0];
+  const candidate = candidateOverride || giverCandidates.find((c) => c.id === candidateId) || giverCandidates[0];
+  const canDecideCandidate = mode === "SELECTION" && Boolean(candidate.assignmentId);
 
   return (
     <div className="flex flex-col gap-4 animate-in fade-in slide-in-from-bottom-4 duration-300">
@@ -188,6 +197,12 @@ export function CandidateReview({
             <span className="mt-1.5 inline-flex rounded-[8px] bg-[#E0F2FE] px-2.5 py-0.5 text-[11px] font-bold text-[#0369A1] ring-1 ring-[#0369A1]/20">
               {candidate.reliabilityBadge}
             </span>
+            {candidate.questTitle ? (
+              <div className="mt-3 rounded-[8px] bg-base-200 px-2.5 py-1.5 text-center">
+                <p className="text-[10px] font-bold uppercase text-base-content/50">Quest</p>
+                <p className="text-xs font-bold text-base-content">{candidate.questTitle}</p>
+              </div>
+            ) : null}
             {mode === "AUDIT" && (
               <div className="mt-3 rounded-[8px] bg-[#DBEAFE] px-2.5 py-1.5 text-center">
                 <p className="text-[10px] font-bold text-[#1D4ED8] uppercase">Status</p>
@@ -207,9 +222,9 @@ export function CandidateReview({
               </div>
               <p className="text-xs text-base-content/60 mt-1">
                 <span className="text-success font-semibold px-1.5 py-0.5 text-[10px] bg-success/10 rounded">
-                  LIVE ETA
+                  {candidate.appliedAt ? "APPLIED" : "LIVE ETA"}
                 </span>{" "}
-                ±{candidate.etaMinutes} Menit ke Lokasi
+                {candidate.appliedAt || `Estimasi ${candidate.etaMinutes} menit ke lokasi`}
               </p>
             </div>
 
@@ -256,12 +271,24 @@ export function CandidateReview({
             <div className="flex flex-col sm:flex-row gap-3">
               <button
                 type="button"
+                disabled={!canDecideCandidate || isWorking}
+                onClick={() => {
+                  if (candidate.assignmentId) {
+                    void onConfirm?.(candidate.assignmentId);
+                  }
+                }}
                 className="btn h-12 flex-1 rounded-[10px] border-none bg-[#2563EB] text-white hover:bg-[#2563EB]/90 text-sm sm:text-base font-bold shadow-lg shadow-[#2563EB]/30 transition-transform active:scale-95"
               >
-                Pilih & Tugaskan Kandidat
+                {isWorking ? "Memproses..." : "Pilih & Tugaskan Kandidat"}
               </button>
               <button
                 type="button"
+                disabled={!canDecideCandidate || isWorking}
+                onClick={() => {
+                  if (candidate.assignmentId) {
+                    void onReject?.(candidate.assignmentId);
+                  }
+                }}
                 className="btn h-12 flex-1 rounded-[10px] border border-error/30 bg-error/5 text-error hover:bg-error/10 text-sm sm:text-base font-bold transition-transform active:scale-95"
               >
                 Tolak Pelamar Ini

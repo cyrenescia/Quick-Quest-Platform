@@ -1,3 +1,4 @@
+import GlobalEndpoint, { requestJson } from "../../../global.service";
 import type {
   ContractArchiveRow,
   PpLedgerRow,
@@ -437,3 +438,197 @@ export const recentRoleDataSeed: Record<"runner" | "giver", RecentRoleDataSeed> 
     ppLedgerRows: giverPpLedgerRows,
   },
 };
+
+type ApiEnvelope<T> = {
+  data?: T;
+};
+
+type ApiHistoryQuest = {
+  id?: string;
+  quest_id?: string;
+  title?: string;
+  category?: string;
+  mode?: string;
+  status?: string;
+  reward_amount?: string;
+  reward_display?: string;
+  updated_at?: string | null;
+  giver?: {
+    fullname?: string;
+    username?: string;
+  };
+};
+
+type ApiHistoryItem = {
+  assignment_id?: string;
+  assignment_status?: string;
+  finished_at?: string | null;
+  quest?: ApiHistoryQuest;
+  escrow?: {
+    escrow_state?: string;
+  };
+  rating_state?: {
+    both_rated?: boolean;
+  };
+} & ApiHistoryQuest;
+
+function normalizeHistoryStatus(item: ApiHistoryItem): QuestHistoryRow["status"] {
+  const assignmentStatus = (item.assignment_status ?? "").toLowerCase();
+  const questStatus = (item.quest?.status ?? item.status ?? "").toLowerCase();
+  const escrowState = (item.escrow?.escrow_state ?? "").toLowerCase();
+  if (assignmentStatus === "disputed" || questStatus === "disputed" || escrowState === "disputed") {
+    return "Disputed";
+  }
+  if (item.rating_state?.both_rated || (questStatus === "completed" && escrowState === "released")) {
+    return "Completed";
+  }
+  if (assignmentStatus === "finished" || questStatus === "pending_review" || escrowState === "pending") {
+    return "Pending Confirmation";
+  }
+  if (assignmentStatus === "active" || questStatus === "in_progress" || escrowState === "in_progress") {
+    return "In Progress";
+  }
+  return "Open";
+}
+
+function formatHistoryDate(value?: string | null): string {
+  if (!value) return "Baru saja";
+  const date = new Date(value);
+  return Number.isFinite(date.getTime()) ? date.toLocaleString("id-ID") : "Baru saja";
+}
+
+function formatHistoryValue(item: ApiHistoryItem): string {
+  const quest = item.quest ?? item;
+  if (quest.reward_display) return quest.reward_display;
+  const amount = Number((quest.reward_amount ?? "").replace(/[^\d.-]/g, ""));
+  if (!Number.isFinite(amount) || amount <= 0) return "Rp0";
+  return `Rp${amount.toLocaleString("id-ID")}`;
+}
+
+function mapHistoryItem(item: ApiHistoryItem, roleContext: "runner" | "giver"): {
+  quest: QuestHistoryRow;
+  contract: ContractArchiveRow;
+} {
+  const quest = item.quest ?? item;
+  const questId = quest.id || quest.quest_id || item.assignment_id || "QUEST-HISTORY";
+  const title = quest.title || "Quest selesai";
+  const status = normalizeHistoryStatus(item);
+  const updatedAt = formatHistoryDate(item.finished_at || quest.updated_at);
+  const giverName = roleContext === "runner"
+    ? quest.giver?.fullname || quest.giver?.username || "Verified Giver"
+    : "Kamu";
+
+  return {
+    quest: {
+      questId,
+      title,
+      category: quest.category || "General",
+      status,
+      progress: status === "Completed" ? "Loop selesai: release + both-rated" : "Riwayat sengketa/fallback",
+      updatedAt,
+    },
+    contract: {
+      contractId: item.assignment_id || questId,
+      questTitle: title,
+      giver: giverName,
+      runner: roleContext === "runner" ? "Kamu" : "Runner terkait",
+      type: (quest.mode ?? "").toLowerCase() === "group" ? "Ber-Kelompok" : "Per-Individu",
+      status,
+      startDate: updatedAt,
+      endDate: updatedAt,
+      value: formatHistoryValue(item),
+    },
+  };
+}
+
+export async function fetchRecentHistoryFromApi(roleContext: "runner" | "giver"): Promise<{
+  contractArchiveRows: ContractArchiveRow[];
+  questHistoryRows: QuestHistoryRow[];
+}> {
+  const endpoint = roleContext === "giver"
+    ? GlobalEndpoint().giverQuest.history
+    : GlobalEndpoint().runnerQuest.history;
+  const response = await requestJson<ApiEnvelope<{ items?: ApiHistoryItem[] }>>(endpoint);
+  const rows = Array.isArray(response.data?.items) ? response.data.items : [];
+  const mapped = rows.map((item) => mapHistoryItem(item, roleContext));
+  return {
+    contractArchiveRows: mapped.map((item) => item.contract),
+    questHistoryRows: mapped.map((item) => item.quest),
+  };
+}
+
+export type RecentDisputeEvidence = {
+  id?: string;
+  uploader?: "GIVER" | "RUNNER" | "MEDIATOR" | string;
+  type?: string;
+  label?: string;
+  uploadedAt?: string;
+  url?: string;
+  file_name?: string;
+  note_text?: string;
+  metadata?: Record<string, unknown>;
+};
+
+export type RecentDisputeCase = {
+  id: string;
+  questId?: string;
+  questTitle?: string;
+  assignmentId?: string;
+  amount?: string;
+  raisedBy?: "GIVER" | "RUNNER" | string;
+  raisedAt?: string;
+  status?: string;
+  evidenceDeadline?: string;
+  reason?: string;
+  mediatorNote?: string;
+  giverEvidence?: RecentDisputeEvidence[];
+  runnerEvidence?: RecentDisputeEvidence[];
+  timeline?: Array<{
+    status?: string;
+    time?: string;
+    description?: string;
+  }>;
+};
+
+export type RecentDisputeEvidencePayload = {
+  type: "photo" | "video" | "file" | "note";
+  label: string;
+  note_text?: string;
+  file_name?: string;
+  file_url?: string;
+  metadata?: Record<string, unknown>;
+};
+
+export async function fetchRecentDisputesFromApi(): Promise<RecentDisputeCase[]> {
+  const response = await requestJson<ApiEnvelope<{ items?: RecentDisputeCase[] }>>(
+    GlobalEndpoint().dispute.list,
+  );
+  return Array.isArray(response.data?.items) ? response.data.items : [];
+}
+
+export async function fetchRecentDisputeDetailFromApi(disputeId: string): Promise<RecentDisputeCase> {
+  const response = await requestJson<ApiEnvelope<RecentDisputeCase>>(
+    GlobalEndpoint().dispute.detail(disputeId),
+  );
+  if (!response.data) {
+    throw new Error("Detail dispute tidak ditemukan.");
+  }
+  return response.data;
+}
+
+export async function submitRecentDisputeEvidenceFromApi(
+  disputeId: string,
+  payload: RecentDisputeEvidencePayload,
+): Promise<RecentDisputeCase> {
+  const response = await requestJson<ApiEnvelope<RecentDisputeCase>>(
+    GlobalEndpoint().dispute.evidence(disputeId),
+    {
+      method: "POST",
+      body: payload,
+    },
+  );
+  if (!response.data) {
+    throw new Error("Evidence dispute gagal disimpan.");
+  }
+  return response.data;
+}
