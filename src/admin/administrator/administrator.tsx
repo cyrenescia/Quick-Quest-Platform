@@ -1,5 +1,9 @@
 import { useEffect, useMemo, useState } from "react";
-import { useAdminRoute } from "../route.context.tsx";
+import { AdminLayout } from "./component/AdminLayout.tsx";
+import { DashboardView } from "./content/dashboard/dashboard.tsx";
+import { ManagementView } from "./content/management/management.tsx";
+import { AccountView } from "./content/account/account.tsx";
+
 import {
   buildAdminStatCards,
   buildAdminDisputeStatCards,
@@ -37,10 +41,11 @@ import {
 } from "./administrator";
 
 export default function AdministratorComponent() {
-  const { navigate } = useAdminRoute();
+
   const copy = getAdministratorCopy();
   const disputeCopy = getAdminDisputeCopy();
-  const [activeQueue, setActiveQueue] = useState<AdminConsoleQueue>("verification");
+  const [activeMenu, setActiveMenu] = useState<"dashboard" | "verification" | "dispute" | "management" | "account">("dashboard");
+  const activeQueue: AdminConsoleQueue = activeMenu === "dispute" ? "dispute" : "verification";
   const [items, setItems] = useState<AdminVerificationItem[]>([]);
   const [selectedItem, setSelectedItem] = useState<AdminVerificationItem | null>(null);
   const [disputeItems, setDisputeItems] = useState<AdminDisputeItem[]>([]);
@@ -210,8 +215,20 @@ export default function AdministratorComponent() {
   }, [activeQueue]);
 
   return (
-    <div className="theme-bg min-h-screen bg-base-100 px-4 py-5 text-base-content sm:px-6 lg:px-8">
-      <div className="mx-auto flex max-w-7xl flex-col gap-5">
+    <AdminLayout
+      activeMenu={activeMenu}
+      onMenuChange={setActiveMenu}
+      onLogout={exitAdministratorToUserLogin}
+      onUserSwitch={exitAdministratorToUserLogin}
+    >
+      {activeMenu === "dashboard" ? (
+        <DashboardView />
+      ) : activeMenu === "management" ? (
+        <ManagementView />
+      ) : activeMenu === "account" ? (
+        <AccountView />
+      ) : (
+        <div className="mx-auto flex max-w-7xl flex-col gap-5">
         <header className="flex flex-col gap-4 border-b border-base-300 pb-5 lg:flex-row lg:items-end lg:justify-between">
           <div className="min-w-0">
             <p className="text-xs font-semibold uppercase tracking-[0.18em] text-error">
@@ -227,7 +244,7 @@ export default function AdministratorComponent() {
           <div className="flex flex-wrap gap-2">
             <button
               type="button"
-              onClick={() => setActiveQueue("verification")}
+              onClick={() => setActiveMenu("verification")}
               className={`btn h-10 min-h-10 rounded-lg border px-4 text-sm shadow-none ${
                 activeQueue === "verification"
                   ? "border-error/30 bg-error/10 text-error"
@@ -238,7 +255,7 @@ export default function AdministratorComponent() {
             </button>
             <button
               type="button"
-              onClick={() => setActiveQueue("dispute")}
+              onClick={() => setActiveMenu("dispute")}
               className={`btn h-10 min-h-10 rounded-lg border px-4 text-sm shadow-none ${
                 activeQueue === "dispute"
                   ? "border-error/30 bg-error/10 text-error"
@@ -264,20 +281,6 @@ export default function AdministratorComponent() {
             >
               {activeQueue === "dispute" ? disputeCopy.refresh : copy.refresh}
             </button>
-            <button
-              type="button"
-              onClick={() => navigate("login")}
-              className="btn h-10 min-h-10 rounded-lg border border-error/25 bg-error/10 px-4 text-sm text-error shadow-none hover:bg-error/15"
-            >
-              Admin Login
-            </button>
-            <button
-              type="button"
-              onClick={exitAdministratorToUserLogin}
-              className="btn h-10 min-h-10 rounded-lg border border-base-300 bg-base-100 px-4 text-sm shadow-none hover:bg-base-200"
-            >
-              Login User
-            </button>
           </div>
         </header>
 
@@ -285,7 +288,7 @@ export default function AdministratorComponent() {
           {statCards.map((card) => (
             <article
               key={card.label}
-              className="rounded-lg border border-base-300 bg-base-100 p-4 shadow-sm"
+              className="rounded-lg border border-base-300/50 bg-base-100/40 backdrop-blur-xl p-4 shadow-sm transition-all duration-300"
             >
               <p className="text-xs font-bold uppercase tracking-[0.14em] text-base-content/45">
                 {card.label}
@@ -308,7 +311,7 @@ export default function AdministratorComponent() {
         )}
 
         <main className="grid min-h-[620px] gap-4 lg:grid-cols-[minmax(20rem,24rem)_1fr]">
-          <section className="rounded-lg border border-base-300 bg-base-100 shadow-sm">
+          <section className="rounded-lg border border-base-300/50 bg-base-100/40 backdrop-blur-xl shadow-sm transition-all duration-300">
             <div className="border-b border-base-300 px-4 py-3">
               <p className="text-sm font-black">
                 {activeQueue === "dispute" ? "Dispute Queue" : "Verification Queue"}
@@ -428,7 +431,7 @@ export default function AdministratorComponent() {
             </div>
           </section>
 
-          <section className="rounded-lg border border-base-300 bg-base-100 shadow-sm">
+          <section className="rounded-lg border border-base-300/50 bg-base-100/40 backdrop-blur-xl shadow-sm transition-all duration-300">
             {activeQueue === "dispute" ? (
               <AdminDisputeDetailPanel
                 selectedDispute={selectedDispute}
@@ -645,7 +648,8 @@ export default function AdministratorComponent() {
           </section>
         </main>
       </div>
-    </div>
+      )}
+    </AdminLayout>
   );
 }
 

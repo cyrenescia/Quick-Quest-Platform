@@ -30,7 +30,8 @@ import {
   type GiverSubView,
   useGiverDashboardVM,
 } from "./giver";
-import { QuestEditor } from "./page/quest-editor";
+import { QuestEditor } from "./page/quest-editor.tsx";
+import { GiverHistoryPage } from "./page/history/history.tsx";
 import { CandidateReview } from "./page/candidate-review";
 import BorderGlow from "../../../../Animation/BorderGlow";
 import { useAnimationTheme } from "../../../global.theme";
@@ -147,6 +148,28 @@ function GiverComponent() {
     persistGiverSubView(subView);
   }, [subView]);
 
+  // Auto-trigger Rating Modal
+  useEffect(() => {
+    if (ratingTarget) return;
+    for (const quest of dashboardVM.publishedQuests) {
+      if (quest.escrowState !== "RELEASED") continue;
+      const assignments = dashboardVM.assignmentsByQuest[quest.id] || [];
+      const unrated = assignments.find(
+        (a: any) => a.status === "finished" && a.viewerHasRated !== true
+      );
+      if (unrated) {
+        setRatingTarget({
+          name: unrated.runnerName,
+          role: "runner",
+          questTitle: quest.title,
+          questId: quest.id,
+          assignmentId: unrated.id,
+        });
+        break;
+      }
+    }
+  }, [dashboardVM.publishedQuests, dashboardVM.assignmentsByQuest, ratingTarget]);
+
   const filteredBroadcasts = useMemo(
     () => filterGiverBroadcastQuests(dashboardVM.publishedQuests, broadcastFilter),
     [broadcastFilter, dashboardVM.publishedQuests],
@@ -183,6 +206,10 @@ function GiverComponent() {
         }}
       />
     );
+  }
+
+  if (subView?.view === "History") {
+    return <GiverHistoryPage onBack={() => setSubView(null)} />;
   }
 
   if (subView?.view === "CandidateReview") {
@@ -230,13 +257,22 @@ function GiverComponent() {
             </p>
           ) : null}
         </div>
-        <button
-          type="button"
-          onClick={() => setSubView({ view: "QuestEditor" })}
-          className="btn h-10 w-full sm:w-auto px-6 rounded-[10px] bg-[#6B21FF] hover:bg-[#6B21FF]/90 text-white border-none font-bold shadow-lg shadow-[#6B21FF]/30 transition-transform active:scale-95 text-sm"
-        >
-          {giverViewText.hero.createQuestButton}
-        </button>
+        <div className="flex gap-2 w-full sm:w-auto">
+          <button
+            type="button"
+            onClick={() => setSubView({ view: "History" })}
+            className="btn h-10 flex-1 sm:flex-none px-6 rounded-[10px] bg-base-200 hover:bg-base-300 text-base-content border-none font-bold transition-transform active:scale-95 text-sm"
+          >
+            Riwayat
+          </button>
+          <button
+            type="button"
+            onClick={() => setSubView({ view: "QuestEditor" })}
+            className="btn h-10 flex-1 sm:flex-none px-6 rounded-[10px] bg-[#6B21FF] hover:bg-[#6B21FF]/90 text-white border-none font-bold shadow-lg shadow-[#6B21FF]/30 transition-transform active:scale-95 text-sm"
+          >
+            {giverViewText.hero.createQuestButton}
+          </button>
+        </div>
       </Surface>
 
       {dashboardVM.draftQuests.length ? (

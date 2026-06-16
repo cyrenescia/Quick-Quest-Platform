@@ -131,7 +131,8 @@ export type GiverPostQuestInsight = {
 
 export type GiverSubView =
   | { view: "QuestEditor"; payload?: { draft?: GiverDraftQuest } }
-  | { view: "CandidateReview"; payload: { id: string } };
+  | { view: "CandidateReview"; payload: { id: string } }
+  | { view: "History" };
 
 export type GiverRadiusRuntime = {
   currentRadius: number;

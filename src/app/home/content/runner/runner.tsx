@@ -15,6 +15,7 @@ import { RunnerActiveQuestPage } from "./page/active-quest/active-quest.tsx";
 import { PartyLobbyRoomPage } from "./page/party-lobby-room/party-lobby-room.tsx";
 import { RunnerMapsLivePage } from "./page/maps-live/maps-live.tsx";
 import { RunnerInsightsPage } from "./page/insights/insights.tsx";
+import { RunnerHistoryPage } from "./page/history/history.tsx";
 
 const runnerNavigatorViews: RunnerSubView["view"][] = [
   "Home",
@@ -22,6 +23,7 @@ const runnerNavigatorViews: RunnerSubView["view"][] = [
   "ActiveQuest",
   "PartyLobbyRoom",
   "Insights",
+  "History",
   "MapsLive",
 ];
 
@@ -37,6 +39,8 @@ function resolveRunnerNavigatorLabel(view: RunnerSubView["view"]): string {
       return runnerViewText.navigator.partyLobby;
     case "Insights":
       return runnerViewText.navigator.insights;
+    case "History":
+      return "Riwayat";
     case "MapsLive":
       return "Radar Live";
     default:
@@ -165,6 +169,10 @@ function RunnerComponent() {
 
       {subView.view === "Insights" ? (
         <RunnerInsightsPage onBack={() => setSubView({ view: "Home" })} />
+      ) : null}
+
+      {subView.view === "History" ? (
+        <RunnerHistoryPage onBack={() => setSubView({ view: "Home" })} />
       ) : null}
 
       {subView.view === "Home" ? (

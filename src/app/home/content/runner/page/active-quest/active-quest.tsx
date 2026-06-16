@@ -56,6 +56,21 @@ export function RunnerActiveQuestPage({ onBack }: { onBack: () => void }) {
     return () => window.clearInterval(timer);
   }, []);
 
+  // Auto-trigger Rating Modal
+  useEffect(() => {
+    if (ratingTarget) return;
+    const finishedUnrated = quests.find(q => q.escrowState === "RELEASED" && !q.viewerHasRated);
+    if (finishedUnrated) {
+      setRatingTarget({
+        name: finishedUnrated.giverName,
+        role: "giver",
+        questTitle: finishedUnrated.questTitle,
+        questId: finishedUnrated.id,
+        assignmentId: finishedUnrated.assignmentId,
+      });
+    }
+  }, [quests, ratingTarget]);
+
   return (
     <div className="space-y-4 animate-in fade-in slide-in-from-bottom-4 duration-300">
       <Surface className="p-5 sm:p-6 border border-base-300">
