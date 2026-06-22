@@ -187,76 +187,6 @@ function PpGainPreview({
   );
 }
 
-// ─── Success State ────────────────────────────────────────────────────────────
-
-function SuccessState({
-  score,
-  targetName,
-  pp,
-}: {
-  score: number;
-  targetName: string;
-  pp: number;
-}) {
-  const confetti = ["🎉", "⭐", "✨", "🏆", "💫", "🌟"];
-  return (
-    <div className="flex flex-col items-center gap-4 py-4 text-center">
-      <div className="relative text-6xl">
-        <span
-          className="block"
-          style={{
-            animation: "bounce 0.6s cubic-bezier(0.34, 1.56, 0.64, 1)",
-          }}
-        >
-          🎉
-        </span>
-        {confetti.map((emoji, i) => (
-          <span
-            key={i}
-            className="pointer-events-none absolute text-xl"
-            style={{
-              top: `${Math.cos((i / confetti.length) * Math.PI * 2) * 40}px`,
-              left: `${Math.sin((i / confetti.length) * Math.PI * 2) * 40 + 24}px`,
-              animation: `ping 0.8s ${i * 0.1}s both`,
-              opacity: 0,
-            }}
-          >
-            {emoji}
-          </span>
-        ))}
-      </div>
-      <div>
-        <p className="text-xl font-black text-base-content">
-          {ratingModalCopy.successTitle}
-        </p>
-        <p className="mt-1 text-sm text-base-content/60">
-          {ratingModalCopy.successPpText}{" "}
-          <span className="font-bold text-base-content">{targetName}</span>
-        </p>
-      </div>
-      {/* Stars recap */}
-      <div className="flex gap-1">
-        {[1, 2, 3, 4, 5].map((s) => (
-          <svg
-            key={s}
-            viewBox="0 0 24 24"
-            className="h-6 w-6"
-            fill={s <= score ? "#f59e0b" : "#e5e7eb"}
-          >
-            <path d="M12 3.75L14.47 8.76L20 9.56L16 13.46L16.94 19L12 16.4L7.06 19L8 13.46L4 9.56L9.53 8.76L12 3.75Z" />
-          </svg>
-        ))}
-      </div>
-      <div
-        className="rounded-2xl px-6 py-2 text-sm font-bold text-white"
-        style={{ background: "linear-gradient(135deg, #2563EB, #7c3aed)" }}
-      >
-        +{pp} PP
-      </div>
-    </div>
-  );
-}
-
 // ─── Main Modal ───────────────────────────────────────────────────────────────
 
 export default function RatingModal({
@@ -273,9 +203,9 @@ export default function RatingModal({
   const [submitState, setSubmitState] = useState<
     "idle" | "loading" | "success"
   >("idle");
+  const [tierData, setTierData] = useState<{ changed: boolean; newTier?: string }>({ changed: false });
 
   const tags = ratingTagsByRole[target.role];
-  const pp = estimatePPGain(score);
 
   function toggleTag(tag: string) {
     setSelectedTags((prev) =>
@@ -309,13 +239,16 @@ export default function RatingModal({
       comment,
     };
     try {
-      await submitRating(payload);
+      const result = await submitRating(payload);
+      if (result?.tier_progression?.tier_changed) {
+        setTierData({ changed: true, newTier: result.tier_progression.current_tier });
+      }
       onSubmit?.(payload);
       setSubmitState("success");
       setTimeout(() => {
         resetState();
         onClose();
-      }, 2200);
+      }, result?.tier_progression?.tier_changed ? 4000 : 2200);
     } catch (error) {
       setErrorMessage(error instanceof Error ? error.message : "Gagal mengirim rating.");
       setSubmitState("idle");
@@ -352,7 +285,24 @@ export default function RatingModal({
 
         <div className="p-6">
           {submitState === "success" ? (
-            <SuccessState score={score} targetName={target.name} pp={pp} />
+            <div className="flex flex-col items-center py-6 animate-in fade-in zoom-in duration-300">
+              <div className="mb-4 flex h-16 w-16 items-center justify-center rounded-full bg-success/20 text-4xl text-success">
+                ✓
+              </div>
+              <h3 className="text-xl font-black text-base-content">{copy.successTitle}</h3>
+              <p className="mt-2 text-center text-sm font-medium text-base-content/60">
+                {copy.successPpText} <span className="font-bold text-base-content">{target.name}</span>.
+              </p>
+              
+              {tierData.changed && (
+                <div className="mt-6 rounded-xl border border-primary/30 bg-primary/10 p-4 text-center animate-in slide-in-from-bottom-4 duration-500">
+                  <p className="text-xs font-bold uppercase tracking-wider text-primary">🎉 Tier Upgraded!</p>
+                  <p className="mt-1 text-sm font-semibold text-base-content/80">
+                    Selamat! Kamu naik ke tier <span className="font-black text-primary">{tierData.newTier}</span>!
+                  </p>
+                </div>
+              )}
+            </div>
           ) : (
             <>
               {/* Header */}
@@ -505,3 +455,4 @@ export default function RatingModal({
     </div>
   );
 }
+

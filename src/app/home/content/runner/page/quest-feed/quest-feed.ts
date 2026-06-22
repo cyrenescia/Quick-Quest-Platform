@@ -81,6 +81,10 @@ export function formatQuestFeedExpandCountdown(seconds?: number): string {
 }
 
 export function resolveQuestFeedMatchReason(quest: RunnerQuestFeedItem): string {
+  if (quest.isAccessible === false) {
+    return quest.accessibilityReason || "Quest terkunci untuk tier runner saat ini.";
+  }
+
   const activeRadius = quest.activeRadiusKm ?? Math.max(1, quest.distanceKm);
   const nextRadius = quest.nextRadiusKm ?? activeRadius + 1;
   const distanceText = Number.isFinite(quest.distanceKm)
@@ -99,7 +103,7 @@ export function resolveQuestFeedMatchReason(quest: RunnerQuestFeedItem): string 
 }
 
 export function canTakeQuestFromFeed(quest: RunnerQuestFeedItem): boolean {
-  return quest.withinMatchRadius !== false;
+  return quest.withinMatchRadius !== false && quest.isAccessible !== false;
 }
 
 export function resolveQuestFeedActionLabel(
@@ -108,6 +112,10 @@ export function resolveQuestFeedActionLabel(
 ): string {
   if (isWorking) {
     return "Mengirim lamaran...";
+  }
+
+  if (quest.isAccessible === false) {
+    return "Tier terkunci";
   }
 
   if (!canTakeQuestFromFeed(quest)) {

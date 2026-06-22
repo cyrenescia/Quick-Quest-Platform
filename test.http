@@ -1,0 +1,18 @@
+@baseUrl = http://localhost:4450
+@accessToken = paste-access-token-here
+
+### Performance Summary
+GET {{baseUrl}}/api/performance/summary
+Authorization: Bearer {{accessToken}}
+
+### Performance Ledger
+GET {{baseUrl}}/api/performance/ledger?page=1&limit=10
+Authorization: Bearer {{accessToken}}
+
+### Performance Skills
+GET {{baseUrl}}/api/performance/skills
+Authorization: Bearer {{accessToken}}
+
+### Performance Ratings
+GET {{baseUrl}}/api/performance/ratings?page=1&limit=10
+Authorization: Bearer {{accessToken}}

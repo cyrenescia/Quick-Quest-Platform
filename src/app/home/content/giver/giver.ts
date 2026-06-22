@@ -30,6 +30,11 @@ import {
   type ApiGiverAssignment,
   type EditorQuestType,
   type EditorStep,
+  type QuestContractType,
+  type QuestIdentityLevel,
+  type QuestRequirementLevel,
+  type QuestTier,
+  type QuestTierStatus,
 } from "./giver.service";
 
 export type GiverKpiCard = {
@@ -58,6 +63,17 @@ export type GiverBroadcastQuest = {
   skillTags?: string[];
   wageBand: string;
   rewardAmount?: number;
+  contractType?: QuestContractType;
+  contractDurationDays?: number;
+  reqEducation?: QuestRequirementLevel;
+  reqEducationDetail?: string;
+  reqPortfolio?: QuestRequirementLevel;
+  reqIdentityLevel?: QuestIdentityLevel;
+  reqDocuments?: string[];
+  questTier?: QuestTier;
+  tierScore?: number;
+  tierStatus?: QuestTierStatus;
+  tierClassifiedAt?: string;
   slotFilled: number;
   slotTotal: number;
   baseRadiusKm: number;
@@ -544,6 +560,13 @@ export function parseRupiah(val: string): number {
   return parseInt(val.replace(/\./g, "").replace(/,/g, ""), 10) || 0;
 }
 
+function splitRequirementDocuments(value: string): string[] {
+  return value
+    .split(/[\n,]/)
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
 export function useQuestEditorVM(initialDraft?: GiverDraftQuest, onPublished?: () => void) {
   const initialReward = initialDraft?.rewardAmount
     ? formatRupiah(String(initialDraft.rewardAmount))
@@ -557,6 +580,27 @@ export function useQuestEditorVM(initialDraft?: GiverDraftQuest, onPublished?: (
   );
   const [questType, setQuestType] = useState<EditorQuestType>(
     initialDraft?.modeValue === "group" || initialDraft?.mode === "Ber-Kelompok" ? "KELOMPOK" : "SOLO",
+  );
+  const [contractType, setContractType] = useState<QuestContractType>(
+    initialDraft?.contractType ?? "one_off",
+  );
+  const [contractDurationDays, setContractDurationDays] = useState(
+    initialDraft?.contractDurationDays ? String(initialDraft.contractDurationDays) : "",
+  );
+  const [reqEducation, setReqEducation] = useState<QuestRequirementLevel>(
+    initialDraft?.reqEducation ?? "none",
+  );
+  const [reqEducationDetail, setReqEducationDetail] = useState(
+    initialDraft?.reqEducationDetail ?? "",
+  );
+  const [reqPortfolio, setReqPortfolio] = useState<QuestRequirementLevel>(
+    initialDraft?.reqPortfolio ?? "none",
+  );
+  const [reqIdentityLevel, setReqIdentityLevel] = useState<QuestIdentityLevel>(
+    initialDraft?.reqIdentityLevel ?? "basic",
+  );
+  const [reqDocumentsText, setReqDocumentsText] = useState(
+    initialDraft?.reqDocuments?.join(", ") ?? "",
   );
   const [slotCount, setSlotCount] = useState(Math.max(1, initialDraft?.slotTotal ?? 1));
   const [selectedSkills, setSelectedSkills] = useState<string[]>(
@@ -572,6 +616,12 @@ export function useQuestEditorVM(initialDraft?: GiverDraftQuest, onPublished?: (
   const [paymentMethod, setPaymentMethod] = useState("virtual_account");
   const [escrowLocked, setEscrowLocked] = useState(initialDraft?.escrowState === "LOCKED");
   const [createdQuestId, setCreatedQuestId] = useState(initialDraft?.id ?? "");
+  const [classifiedTier, setClassifiedTier] = useState<QuestTier>(
+    initialDraft?.questTier ?? "Q1",
+  );
+  const [classificationStatus, setClassificationStatus] = useState<QuestTierStatus>(
+    initialDraft?.tierStatus ?? "auto_classified",
+  );
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [statusMessage, setStatusMessage] = useState(
     initialDraft ? "Draft privat dimuat. Edit lalu update sebelum broadcast." : "",
@@ -585,6 +635,9 @@ export function useQuestEditorVM(initialDraft?: GiverDraftQuest, onPublished?: (
   const platformFeeMin = Math.round(totalEscrowMin * (QQM_PLATFORM_FEE_PERCENT / 100));
   const platformFeeMax = Math.round(totalEscrowMax * (QQM_PLATFORM_FEE_PERCENT / 100));
   const totalDepositMax = totalEscrowMax + platformFeeMax;
+  const contractDurationNum = parseInt(contractDurationDays, 10);
+  const normalizedContractDuration =
+    Number.isFinite(contractDurationNum) && contractDurationNum >= 0 ? contractDurationNum : null;
 
   function toggleSkill(skill: string) {
     setSelectedSkills((prev) =>
@@ -599,8 +652,11 @@ export function useQuestEditorVM(initialDraft?: GiverDraftQuest, onPublished?: (
     upahMin !== "" &&
     upahMax !== "" &&
     upahMaxNum >= upahMinNum;
-  const canProceedStep2 = true;
-  const canBroadcast = escrowLocked;
+  const canProceedStep2 =
+    contractDurationDays.trim() === "" ||
+    (normalizedContractDuration !== null && normalizedContractDuration >= 0);
+  const isTierPendingReview = classificationStatus === "pending_review";
+  const canBroadcast = escrowLocked && !isTierPendingReview;
   const isEditingDraft = Boolean(initialDraft?.id);
 
   function buildDraftPayload() {
@@ -612,6 +668,13 @@ export function useQuestEditorVM(initialDraft?: GiverDraftQuest, onPublished?: (
       skill_tags: selectedSkills,
       reward_amount: upahMaxNum,
       reward_currency: "IDR" as const,
+      contract_type: contractType,
+      contract_duration_days: contractType === "one_off" ? null : normalizedContractDuration,
+      req_education: reqEducation,
+      req_education_detail: reqEducationDetail.trim(),
+      req_portfolio: reqPortfolio,
+      req_identity_level: reqIdentityLevel,
+      req_documents: splitRequirementDocuments(reqDocumentsText),
       max_runner: questType === "KELOMPOK" ? slotCount : 1,
       full_address: locationAddress.trim(),
       base_radius_km: baseRadius,
@@ -628,10 +691,15 @@ export function useQuestEditorVM(initialDraft?: GiverDraftQuest, onPublished?: (
         ? await updateGiverQuestDraftFromApi(createdQuestId, payload)
         : await createGiverQuestFromApi(payload);
       setCreatedQuestId(quest.id ?? createdQuestId);
+      setClassifiedTier(quest.quest_tier ?? "Q1");
+      setClassificationStatus(quest.tier_status ?? "auto_classified");
+      const tierNote = quest.quest_tier
+        ? ` Sistem mengklasifikasikan quest sebagai ${quest.quest_tier}${quest.tier_status === "pending_review" ? " dan perlu review admin" : ""}.`
+        : "";
       setStatusMessage(
         createdQuestId
-          ? "Draft quest berhasil diperbarui. Lanjut deposit atau broadcast kalau escrow sudah locked."
-          : "Draft quest berhasil dibuat. Lanjut deposit escrow.",
+          ? `Draft quest berhasil diperbarui.${tierNote} Lanjut deposit atau broadcast kalau escrow sudah locked.`
+          : `Draft quest berhasil dibuat.${tierNote} Lanjut deposit escrow.`,
       );
       setStep(3);
     } catch (error) {
@@ -651,7 +719,11 @@ export function useQuestEditorVM(initialDraft?: GiverDraftQuest, onPublished?: (
     try {
       await lockGiverQuestEscrowFromApi(createdQuestId, paymentMethod);
       setEscrowLocked(true);
-      setStatusMessage("Escrow berhasil dikunci. Quest siap broadcast.");
+      setStatusMessage(
+        isTierPendingReview
+          ? "Escrow berhasil dikunci. Quest menunggu review admin Q-Tier sebelum broadcast."
+          : "Escrow berhasil dikunci. Quest siap broadcast.",
+      );
     } catch (error) {
       setErrorMessage(error instanceof Error ? error.message : "Gagal mengunci escrow.");
     } finally {
@@ -661,6 +733,10 @@ export function useQuestEditorVM(initialDraft?: GiverDraftQuest, onPublished?: (
 
   async function publishQuest() {
     if (!createdQuestId || !escrowLocked) return;
+    if (isTierPendingReview) {
+      setErrorMessage("Quest masih pending review Q-Tier. Tunggu admin verifikasi sebelum broadcast.");
+      return;
+    }
     setIsSubmitting(true);
     setErrorMessage("");
     try {
@@ -687,6 +763,20 @@ export function useQuestEditorVM(initialDraft?: GiverDraftQuest, onPublished?: (
     setLocationAddress,
     questType,
     setQuestType,
+    contractType,
+    setContractType,
+    contractDurationDays,
+    setContractDurationDays,
+    reqEducation,
+    setReqEducation,
+    reqEducationDetail,
+    setReqEducationDetail,
+    reqPortfolio,
+    setReqPortfolio,
+    reqIdentityLevel,
+    setReqIdentityLevel,
+    reqDocumentsText,
+    setReqDocumentsText,
     slotCount,
     setSlotCount,
     selectedSkills,
@@ -702,6 +792,9 @@ export function useQuestEditorVM(initialDraft?: GiverDraftQuest, onPublished?: (
     escrowLocked,
     setEscrowLocked,
     createdQuestId,
+    classifiedTier,
+    classificationStatus,
+    isTierPendingReview,
     isSubmitting,
     statusMessage,
     errorMessage,

@@ -15,7 +15,7 @@ import type {
 export const RUNNER_SUBVIEW_STORAGE_KEY_SEED = "nvrs-qqm-runner-subview-v1";
 const AUTO_RELEASE_TIMEOUT_HOURS = 24;
 
-type ApiEnvelope<T> = {
+export type ApiEnvelope<T> = {
   success?: boolean;
   message?: string;
   data: T;
@@ -30,6 +30,12 @@ type ApiQuest = {
   skill_tags?: string[];
   reward_amount?: string;
   reward_display?: string;
+  quest_tier?: "Q1" | "Q2" | "Q3" | string;
+  tier_score?: number | string | null;
+  tier_status?: string;
+  runner_tier?: "Q1" | "Q2" | "Q3" | string;
+  is_accessible?: boolean;
+  accessibility_reason?: string;
   distance_km?: number | null;
   matching?: {
     active_radius_km?: number;
@@ -206,6 +212,14 @@ export function mapRunnerQuestFeedFromApi(quest: ApiQuest): RunnerQuestFeedItem 
     giverBadge: "Verified Giver",
     category: quest.category || (quest.skill_tags ?? []).join(" + ") || "General",
     reward: quest.reward_display || formatCurrency(quest.reward_amount),
+    questTier: (quest.quest_tier ?? "Q1").toUpperCase(),
+    tierScore: toNumber(quest.tier_score, 0),
+    tierStatus: quest.tier_status || "auto_classified",
+    runnerTier: (quest.runner_tier ?? "Q1").toUpperCase(),
+    isAccessible: quest.is_accessible !== false,
+    accessibilityReason:
+      quest.accessibility_reason ||
+      `Runner ${(quest.runner_tier ?? "Q1").toUpperCase()} memenuhi akses quest ${(quest.quest_tier ?? "Q1").toUpperCase()}.`,
     distanceKm: Number(distance.toFixed(1)),
     activeRadiusKm: Number(activeRadiusKm.toFixed(1)),
     nextRadiusKm: Number(nextRadiusKm.toFixed(1)),
@@ -231,6 +245,25 @@ export function mapRunnerQuestFeedFromApi(quest: ApiQuest): RunnerQuestFeedItem 
       "Tekan Selesai Kerja setelah pekerjaan rampung.",
     ],
   };
+}
+
+export type ApiPerformanceSummary = {
+  runner_tier?: string;
+  runner_pp?: number;
+  runner_sr?: number;
+  top_skill?: string;
+  stats?: {
+    total_pp_earned?: string;
+    top_skill_scope?: string;
+  };
+  skills?: any[];
+};
+
+export async function fetchRunnerPerformanceSummaryFromApi() {
+  const response = await requestJson<ApiEnvelope<ApiPerformanceSummary>>(
+    GlobalEndpoint().performance.summary,
+  );
+  return response.data ?? null;
 }
 
 function mapRunnerActiveQuestFromApi(item: ApiRunnerAssignment): RunnerActiveQuest {
@@ -263,7 +296,7 @@ function mapRunnerActiveQuestFromApi(item: ApiRunnerAssignment): RunnerActiveQue
     autoReleaseAt,
     autoReleaseSecondsLeft,
     autoReleaseHoursLeft: autoReleaseSecondsLeft / 3600,
-    ppGain: "+0 PP",
+    ppGain: "Pending",
     giverRated: item.rating_state?.giver_rated === true,
     runnerRated: item.rating_state?.runner_rated === true,
     viewerHasRated: item.rating_state?.viewer_has_rated === true,
@@ -302,11 +335,12 @@ export async function takeRunnerQuestFromApi(questId: string, coords?: RunnerRaw
 }
 
 export async function fetchRunnerActiveQuestsFromApi(): Promise<RunnerActiveQuest[]> {
-  const response = await requestJson<ApiEnvelope<{ items?: ApiRunnerAssignment[] }>>(
+  const activeRes = await requestJson<ApiEnvelope<{ items?: ApiRunnerAssignment[] }>>(
     GlobalEndpoint().runnerQuest.active,
   );
-  return Array.isArray(response.data?.items)
-    ? response.data.items.map(mapRunnerActiveQuestFromApi)
+
+  return Array.isArray(activeRes.data?.items)
+    ? activeRes.data.items.map(mapRunnerActiveQuestFromApi)
     : [];
 }
 
@@ -620,6 +654,12 @@ export type RunnerQuestFeedItem = {
   giverBadge: string;
   category: string;
   reward: string;
+  questTier?: string;
+  tierScore?: number;
+  tierStatus?: string;
+  runnerTier?: string;
+  isAccessible?: boolean;
+  accessibilityReason?: string;
   distanceKm: number;
   activeRadiusKm?: number;
   nextRadiusKm?: number;

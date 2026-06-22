@@ -1,12 +1,22 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Surface } from "../../../../home.ui";
-import { questHistoryRows } from "../../../recent/recent.service";
 import RatingModal from "../../../../component/rating/rating-modal.tsx";
 import type { RatingTarget } from "../../../../component/rating/rating-modal";
+import { fetchGiverHistoryRatings } from "./history.service";
 
 export function GiverHistoryPage({ onBack }: { onBack: () => void }) {
   const [ratingTarget, setRatingTarget] = useState<RatingTarget | null>(null);
-  const [historyItems, setHistoryItems] = useState(questHistoryRows.filter(r => r.status === "Completed" || r.status === "Pending Confirmation"));
+  const [ratings, setRatings] = useState<any[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
+
+  useEffect(() => {
+    fetchGiverHistoryRatings().then((res) => {
+      if (res && res.items) {
+        setRatings(res.items);
+      }
+      setIsLoading(false);
+    }).catch(() => setIsLoading(false));
+  }, []);
 
   return (
     <div className="space-y-4 animate-in fade-in slide-in-from-bottom-4 duration-300">
@@ -30,66 +40,53 @@ export function GiverHistoryPage({ onBack }: { onBack: () => void }) {
         </div>
       </Surface>
 
-      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
-        {historyItems.map((item, index) => {
-          const isUnrated = index % 2 === 1; // Simulate some unrated quests for UI demo
-          return (
+      {isLoading ? (
+        <Surface className="p-8 text-center text-sm text-base-content/50">
+          Loading history...
+        </Surface>
+      ) : ratings.length === 0 ? (
+        <Surface className="p-8 text-center text-sm text-base-content/50">
+          Belum ada riwayat rating.
+        </Surface>
+      ) : (
+        <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
+          {ratings.map((item) => (
             <div
-              key={item.questId}
+              key={item.id || Math.random()}
               className="group relative overflow-hidden rounded-[14px] border border-base-300/50 bg-base-100/40 p-5 shadow-sm backdrop-blur-xl transition-all duration-300 hover:-translate-y-1 hover:border-primary/30 hover:shadow-lg"
             >
               <div className="mb-3 flex items-start justify-between gap-2">
                 <div>
                   <p className="text-[10px] font-bold uppercase tracking-wider text-base-content/50">
-                    {item.questId}
+                    {item.quest_id || "-"}
                   </p>
                   <p className="mt-1 font-bold text-base-content line-clamp-1">
-                    {item.title}
+                    {item.quest_title || `Quest: ${item.quest_id || "Unknown"}`}
                   </p>
-                  <p className="text-xs text-base-content/60">{item.category}</p>
                 </div>
-                <span className="rounded-full bg-success/10 px-2.5 py-0.5 text-[10px] font-bold text-success">
-                  {item.status}
+                <span className="rounded-full bg-primary/10 px-2.5 py-0.5 text-[10px] font-bold text-primary">
+                  {item.quest_tier || "Q1"}
                 </span>
               </div>
 
-              <div className="mt-4 flex items-center justify-between text-xs font-semibold text-base-content/60">
-                <span>{item.updatedAt}</span>
-                <span className="text-primary">{item.progress}</span>
-              </div>
-
-              {/* Beri Rating Trigger */}
-              <div className="mt-4 border-t border-base-300/50 pt-4">
-                {isUnrated ? (
-                  <button
-                    type="button"
-                    onClick={() =>
-                      setRatingTarget({
-                        name: "Runner User",
-                        role: "runner",
-                        questTitle: item.title,
-                        questId: item.questId,
-                        assignmentId: "ASSIGN-" + item.questId,
-                      })
-                    }
-                    className="btn h-9 min-h-9 w-full rounded-[8px] border-none bg-primary text-xs font-bold text-primary-content shadow-none transition-transform active:scale-95 hover:bg-primary/90"
-                  >
-                    Beri Rating Runner
-                  </button>
-                ) : (
-                  <button
-                    type="button"
-                    disabled
-                    className="btn h-9 min-h-9 w-full rounded-[8px] border-none bg-base-200 text-xs font-bold text-base-content/50 shadow-none"
-                  >
-                    Telah Dinilai
-                  </button>
+              <div className="mt-4 flex flex-col gap-1 text-xs text-base-content/70">
+                <p>Role Rater: <span className="font-semibold text-base-content">{item.rater_role || "-"}</span></p>
+                <p>Score: <span className="font-bold text-warning">★ {item.rating_score || 0}</span></p>
+                {item.pp_delta && (
+                  <p>PP: <span className="font-bold text-success">+{item.pp_delta} PP</span></p>
+                )}
+                {item.rating_note && (
+                  <p className="mt-2 rounded bg-base-200 p-2 italic">"{item.rating_note}"</p>
                 )}
               </div>
+
+              <div className="mt-4 border-t border-base-300/50 pt-4 text-[10px] font-medium text-base-content/50">
+                {item.created_at ? new Date(item.created_at).toLocaleDateString() : "-"}
+              </div>
             </div>
-          );
-        })}
-      </div>
+          ))}
+        </div>
+      )}
 
       {ratingTarget && (
         <RatingModal
@@ -97,7 +94,9 @@ export function GiverHistoryPage({ onBack }: { onBack: () => void }) {
           target={ratingTarget}
           onClose={() => setRatingTarget(null)}
           onSubmit={() => {
-            setHistoryItems(prev => prev.map(p => p));
+            fetchGiverHistoryRatings().then((res) => {
+              if (res && res.items) setRatings(res.items);
+            });
           }}
         />
       )}

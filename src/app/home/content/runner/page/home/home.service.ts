@@ -7,6 +7,15 @@ import {
   resolveRunnerFeaturedQuest,
   resolveRunnerPartyHeroParty,
 } from "../../runner";
+import GlobalEndpoint, { requestJson } from "../../../../../global.service";
+import type { ApiEnvelope } from "../../runner.service";
+
+export async function fetchRunnerTierStatus() {
+  const response = await requestJson<ApiEnvelope<any>>(
+    GlobalEndpoint().runnerQuest.tierStatus,
+  );
+  return response.data ?? null;
+}
 
 export function getRunnerHomeSeed() {
   return {

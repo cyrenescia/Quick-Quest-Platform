@@ -6,6 +6,9 @@ import type { GiverDraftQuest } from "../giver";
 import type {
   EditorQuestType as QuestType,
   EditorStep,
+  QuestContractType,
+  QuestIdentityLevel,
+  QuestRequirementLevel,
 } from "../giver.service";
 
 export function QuestEditor({
@@ -30,6 +33,20 @@ export function QuestEditor({
     setLocationAddress,
     questType,
     setQuestType,
+    contractType,
+    setContractType,
+    contractDurationDays,
+    setContractDurationDays,
+    reqEducation,
+    setReqEducation,
+    reqEducationDetail,
+    setReqEducationDetail,
+    reqPortfolio,
+    setReqPortfolio,
+    reqIdentityLevel,
+    setReqIdentityLevel,
+    reqDocumentsText,
+    setReqDocumentsText,
     slotCount,
     setSlotCount,
     selectedSkills,
@@ -44,6 +61,9 @@ export function QuestEditor({
     setPaymentMethod,
     escrowLocked,
     createdQuestId,
+    classifiedTier,
+    classificationStatus,
+    isTierPendingReview,
     isSubmitting,
     statusMessage,
     errorMessage,
@@ -361,6 +381,107 @@ export function QuestEditor({
         {step === 2 && (
           <div className="mt-6 grid gap-6 md:grid-cols-2 relative z-10">
             <div className="space-y-5">
+              <div className="rounded-[12px] border border-base-300/70 bg-base-100 p-4 shadow-sm">
+                <p className="text-xs font-bold uppercase tracking-[0.06em] text-base-content/55">
+                  Kontrak & Requirement
+                </p>
+                <div className="mt-3 grid gap-3 sm:grid-cols-2">
+                  <div>
+                    <label className="text-xs font-bold text-base-content/70">
+                      Tipe Kontrak
+                    </label>
+                    <select
+                      className="select select-bordered w-full mt-1.5 focus:border-[#38BDF8] bg-base-100"
+                      value={contractType}
+                      onChange={(event) => setContractType(event.target.value as QuestContractType)}
+                    >
+                      <option value="one_off">One-off</option>
+                      <option value="fixed_term">Fixed term</option>
+                      <option value="long_term">Long term</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label className="text-xs font-bold text-base-content/70">
+                      Durasi Kontrak (hari)
+                    </label>
+                    <input
+                      type="number"
+                      min={0}
+                      className="input input-bordered w-full mt-1.5 focus:border-[#38BDF8] bg-base-100"
+                      placeholder={contractType === "one_off" ? "Opsional" : "7"}
+                      value={contractDurationDays}
+                      onChange={(event) => setContractDurationDays(event.target.value)}
+                    />
+                  </div>
+                  <div>
+                    <label className="text-xs font-bold text-base-content/70">
+                      Pendidikan
+                    </label>
+                    <select
+                      className="select select-bordered w-full mt-1.5 focus:border-[#38BDF8] bg-base-100"
+                      value={reqEducation}
+                      onChange={(event) => setReqEducation(event.target.value as QuestRequirementLevel)}
+                    >
+                      <option value="none">Tidak wajib</option>
+                      <option value="preferred">Preferred</option>
+                      <option value="required">Required</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label className="text-xs font-bold text-base-content/70">
+                      Detail Pendidikan
+                    </label>
+                    <input
+                      type="text"
+                      className="input input-bordered w-full mt-1.5 focus:border-[#38BDF8] bg-base-100"
+                      placeholder="Min D3 IT, S1 Hukum..."
+                      value={reqEducationDetail}
+                      onChange={(event) => setReqEducationDetail(event.target.value)}
+                    />
+                  </div>
+                  <div>
+                    <label className="text-xs font-bold text-base-content/70">
+                      Portfolio
+                    </label>
+                    <select
+                      className="select select-bordered w-full mt-1.5 focus:border-[#38BDF8] bg-base-100"
+                      value={reqPortfolio}
+                      onChange={(event) => setReqPortfolio(event.target.value as QuestRequirementLevel)}
+                    >
+                      <option value="none">Tidak wajib</option>
+                      <option value="preferred">Preferred</option>
+                      <option value="required">Required</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label className="text-xs font-bold text-base-content/70">
+                      Identitas
+                    </label>
+                    <select
+                      className="select select-bordered w-full mt-1.5 focus:border-[#38BDF8] bg-base-100"
+                      value={reqIdentityLevel}
+                      onChange={(event) => setReqIdentityLevel(event.target.value as QuestIdentityLevel)}
+                    >
+                      <option value="basic">Basic</option>
+                      <option value="ktp">KTP</option>
+                      <option value="full_docs">Full docs</option>
+                    </select>
+                  </div>
+                </div>
+                <div className="mt-3">
+                  <label className="text-xs font-bold text-base-content/70">
+                    Dokumen Pendukung
+                  </label>
+                  <input
+                    type="text"
+                    className="input input-bordered w-full mt-1.5 focus:border-[#38BDF8] bg-base-100"
+                    placeholder="surat sehat, sertifikat, izin kerja..."
+                    value={reqDocumentsText}
+                    onChange={(event) => setReqDocumentsText(event.target.value)}
+                  />
+                </div>
+              </div>
+
               <div>
                 <label className="text-xs font-bold text-base-content/70">
                   Radius Awal Broadcast (km)
@@ -497,6 +618,22 @@ export function QuestEditor({
                       {baseRadius} km
                     </span>
                   </div>
+                  <div className="flex justify-between text-sm">
+                    <span className="text-base-content/65">Kontrak</span>
+                    <span className="font-bold text-base-content">
+                      {contractType === "one_off"
+                        ? "One-off"
+                        : contractType === "fixed_term"
+                          ? `${contractDurationDays || "-"} hari`
+                          : `Long term ${contractDurationDays || "-"} hari`}
+                    </span>
+                  </div>
+                  <div className="flex justify-between text-sm">
+                    <span className="text-base-content/65">Requirement</span>
+                    <span className="font-bold text-base-content">
+                      {reqEducation}/{reqPortfolio}/{reqIdentityLevel}
+                    </span>
+                  </div>
                 </div>
               </div>
 
@@ -524,6 +661,11 @@ export function QuestEditor({
                         : "Buat Draft →"}
                   </button>
                 </div>
+                {!canProceedStep2 && (
+                  <p className="mt-2 text-center text-[10px] font-semibold text-error">
+                    Durasi kontrak harus angka non-negatif.
+                  </p>
+                )}
               </div>
             </div>
           </div>
@@ -551,6 +693,32 @@ export function QuestEditor({
                 {createdQuestId ? (
                   <p className="text-[11px] font-semibold text-primary">Draft ID: {createdQuestId}</p>
                 ) : null}
+                <div className="rounded-[10px] border border-base-200 bg-base-200/40 p-3">
+                  <div className="flex items-center justify-between gap-3">
+                    <span className="text-xs font-bold text-base-content/70">
+                      Q-Tier System
+                    </span>
+                    <span
+                      className={cn(
+                        "rounded-[8px] px-2 py-1 text-[11px] font-bold",
+                        isTierPendingReview
+                          ? "bg-[#FEF3C7] text-[#92400E]"
+                          : "bg-[#DCFCE7] text-[#166534]",
+                      )}
+                    >
+                      {classifiedTier} / {classificationStatus}
+                    </span>
+                  </div>
+                  {isTierPendingReview ? (
+                    <p className="mt-2 text-[11px] font-semibold text-[#92400E]">
+                      Quest ini butuh review admin sebelum bisa dibroadcast.
+                    </p>
+                  ) : (
+                    <p className="mt-2 text-[11px] text-base-content/55">
+                      Tier sudah otomatis diklasifikasikan oleh sistem.
+                    </p>
+                  )}
+                </div>
                 <div className="space-y-2 text-sm">
                   <div className="flex justify-between">
                     <span className="text-base-content/65">
@@ -634,8 +802,10 @@ export function QuestEditor({
                       }
                     >
                       {escrowLocked
-                        ? "LOCKED — Siap Broadcast"
-                        : "UNPAID — Menunggu Deposit"}
+                        ? isTierPendingReview
+                          ? "LOCKED - Menunggu Review Tier"
+                          : "LOCKED - Siap Broadcast"
+                        : "UNPAID - Menunggu Deposit"}
                     </strong>
                   </p>
                 </div>
@@ -716,7 +886,9 @@ export function QuestEditor({
                 >
                   {canBroadcast
                     ? "🚀 Broadcast Quest Sekarang!"
-                    : "⏳ Menunggu Deposit Escrow..."}
+                    : isTierPendingReview
+                      ? "Menunggu Review Admin"
+                      : "⏳ Menunggu Deposit Escrow..."}
                 </button>
 
                 <button

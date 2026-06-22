@@ -16,9 +16,47 @@ import {
   resolveRunnerMemberStatusClass,
   resolveRunnerSkillLevelClass,
 } from "./insights";
+import { useEffect, useState } from "react";
+import {
+  fetchRunnerInsightsSkills,
+  fetchRunnerInsightsSummary,
+} from "./insights.service";
 
 export function RunnerInsightsPage({ onBack }: { onBack: () => void }) {
-  const vm = getRunnerInsightsSeed();
+  const [vm, setVm] = useState(getRunnerInsightsSeed());
+
+  useEffect(() => {
+    Promise.all([
+      fetchRunnerInsightsSummary().catch(() => null),
+      fetchRunnerInsightsSkills().catch(() => null),
+    ]).then(([summary, skillsData]) => {
+      if (!summary && !skillsData) return;
+
+      setVm((prev) => {
+        const next = { ...prev };
+        
+        if (summary) {
+          next.focus = {
+            title: prev.focus.title || "Target Area",
+            description: `Active Focus: ${summary.stats?.top_skill_scope || "General"}. PP: ${summary.runner_pp} (SR: ${summary.runner_sr})`,
+            demandWindow: prev.focus.demandWindow || "Daily",
+          };
+        }
+
+        if (skillsData?.skills) {
+          next.skills = skillsData.skills.map((s: any) => ({
+            skill: s.skill_scope,
+            level: "Q1", // Fallback if API doesn't provide level
+            pp: `${s.total_pp} PP`,
+            completionRate: "100%", // Not available in skills endpoint directly
+            trend: "Stable",
+          }));
+        }
+        
+        return next;
+      });
+    });
+  }, []);
 
   return (
     <div className="space-y-4 animate-in fade-in slide-in-from-bottom-4 duration-300">

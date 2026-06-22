@@ -137,7 +137,9 @@ export type RunnerSubView =
   | { view: "PartyLobbyRoom"; payload: { partyId: string } }
   | { view: "MapsLive" }
   | { view: "Insights" }
-  | { view: "History" };
+  | { view: "History" }
+  | { view: "MetricCenter" }
+  | { view: "SkillInventory" };
 
 export type RunnerWorkStatus = "idle" | "started" | "finished";
 export type RunnerWorkStateMap = Record<string, RunnerWorkStatus>;

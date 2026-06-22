@@ -453,7 +453,17 @@ export const QQM_SKILL_TAGS = [
 
 export const QQM_PLATFORM_FEE_PERCENT = 5;
 
-type ApiEnvelope<T> = {
+export type QuestContractType = "one_off" | "fixed_term" | "long_term";
+export type QuestRequirementLevel = "none" | "preferred" | "required";
+export type QuestIdentityLevel = "basic" | "ktp" | "full_docs";
+export type QuestTier = "Q1" | "Q2" | "Q3";
+export type QuestTierStatus =
+  | "auto_classified"
+  | "pending_review"
+  | "admin_verified"
+  | "overridden";
+
+export type ApiEnvelope<T> = {
   success?: boolean;
   message?: string;
   data: T;
@@ -497,6 +507,19 @@ export type ApiGiverQuest = {
   reward_amount?: string;
   reward_currency?: string;
   reward_display?: string;
+  contract_type?: QuestContractType;
+  contract_duration_days?: number | string | null;
+  req_education?: QuestRequirementLevel;
+  req_education_detail?: string | null;
+  req_portfolio?: QuestRequirementLevel;
+  req_identity_level?: QuestIdentityLevel;
+  req_documents?: string[] | null;
+  quest_tier?: QuestTier;
+  tier_score?: number | string | null;
+  tier_status?: QuestTierStatus;
+  tier_classified_at?: string | null;
+  tier_verified_by?: string | null;
+  tier_override_note?: string | null;
   current_runner_count?: number | string | null;
   max_runner?: number | string | null;
   province?: string;
@@ -552,6 +575,13 @@ export type CreateGiverQuestApiPayload = {
   skill_tags: string[];
   reward_amount: number;
   reward_currency: "IDR";
+  contract_type: QuestContractType;
+  contract_duration_days?: number | null;
+  req_education: QuestRequirementLevel;
+  req_education_detail?: string;
+  req_portfolio: QuestRequirementLevel;
+  req_identity_level: QuestIdentityLevel;
+  req_documents?: string[];
   max_runner: number;
   full_address: string;
   base_radius_km: number;
@@ -667,6 +697,17 @@ export function mapGiverQuestFromApi(quest: ApiGiverQuest): GiverBroadcastQuest 
     skillTag: skillTags.join(" + ") || quest.category || "General",
     wageBand: quest.reward_display || formatCurrencyDisplay(quest.reward_amount),
     rewardAmount,
+    contractType: quest.contract_type || "one_off",
+    contractDurationDays: toNumber(quest.contract_duration_days, 0) || undefined,
+    reqEducation: quest.req_education || "none",
+    reqEducationDetail: quest.req_education_detail || "",
+    reqPortfolio: quest.req_portfolio || "none",
+    reqIdentityLevel: quest.req_identity_level || "basic",
+    reqDocuments: asArray<string>(quest.req_documents ?? []),
+    questTier: quest.quest_tier || "Q1",
+    tierScore: toNumber(quest.tier_score, 0),
+    tierStatus: quest.tier_status || "auto_classified",
+    tierClassifiedAt: quest.tier_classified_at || "",
     slotFilled: currentRunnerCount,
     slotTotal: maxRunner,
     baseRadiusKm: 1,

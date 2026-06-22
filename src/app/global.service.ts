@@ -101,6 +101,7 @@ const ENDPOINTS = {
   runnerQuest: {
     active: joinApiUrl(API_BASE_URLS.stream, "/api/runner/quests/active"),
     history: joinApiUrl(API_BASE_URLS.stream, "/api/runner/quests/history"),
+    tierStatus: joinApiUrl(API_BASE_URLS.stream, "/api/runner/tier-status"),
     take: (questId: string) =>
       joinApiUrl(API_BASE_URLS.stream, `/api/runner/quests/${questId}/take`),
     start: (questId: string) =>
@@ -110,6 +111,12 @@ const ENDPOINTS = {
   },
   rating: {
     create: joinApiUrl(API_BASE_URLS.stream, "/api/ratings"),
+  },
+  performance: {
+    summary: joinApiUrl(API_BASE_URLS.stream, "/api/performance/summary"),
+    ledger: joinApiUrl(API_BASE_URLS.stream, "/api/performance/ledger"),
+    skills: joinApiUrl(API_BASE_URLS.stream, "/api/performance/skills"),
+    ratings: joinApiUrl(API_BASE_URLS.stream, "/api/performance/ratings"),
   },
   dispute: {
     list: joinApiUrl(API_BASE_URLS.stream, "/api/disputes"),

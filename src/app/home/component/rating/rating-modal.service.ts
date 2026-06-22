@@ -76,6 +76,10 @@ type RatingApiResponse = {
     giver_rated?: boolean;
     runner_rated?: boolean;
     both_rated?: boolean;
+    tier_progression?: {
+      tier_changed?: boolean;
+      current_tier?: string;
+    };
   };
 };
 

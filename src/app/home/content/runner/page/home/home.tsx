@@ -7,10 +7,51 @@ export function RunnerHomePage({
 }: {
   onNavigate: (view: RunnerSubView) => void;
 }) {
-  const vm = useRunnerHomeVM();
+  const { vm, tierStatus } = useRunnerHomeVM();
 
   return (
     <div className="space-y-4">
+      {tierStatus && (() => {
+        const currentTier = tierStatus.runner_tier || "Q1";
+        const progressThreshold = currentTier === "Q2" 
+          ? (tierStatus.thresholds?.q3_min_pp || 2000) 
+          : (tierStatus.thresholds?.q2_min_pp || 500);
+        const progressPercentage = Math.min(100, ((tierStatus.runner_pp || 0) / progressThreshold) * 100);
+
+        return (
+          <Surface className="p-4 sm:p-5 flex flex-wrap items-center justify-between gap-4 border border-primary/30 bg-primary/5">
+            <div className="flex items-center gap-3">
+              <div className="flex h-12 w-12 items-center justify-center rounded-full bg-primary/20 text-xl font-bold text-primary">
+                {currentTier}
+              </div>
+              <div>
+                <p className="text-xs font-semibold uppercase tracking-wider text-base-content/60">Current Tier</p>
+                <p className="text-lg font-bold text-base-content">
+                  {tierStatus.runner_pp || 0} <span className="text-sm font-medium text-base-content/50">PP</span>
+                </p>
+              </div>
+            </div>
+            <div className="flex-1 min-w-[200px]">
+              <div className="flex items-center justify-between text-xs font-semibold mb-1.5">
+                <span className="text-base-content/70">Progress to {tierStatus.next_tier || (currentTier === "Q1" ? "Q2" : "Q3")}</span>
+                <span className="text-primary">
+                  {progressPercentage.toFixed(1)}%
+                </span>
+              </div>
+              <div className="h-2 w-full rounded-full bg-base-200 overflow-hidden">
+                <div 
+                  className="h-full rounded-full bg-primary transition-all duration-500" 
+                  style={{ width: `${progressPercentage}%` }}
+                />
+              </div>
+              {!tierStatus.can_upgrade_q2 && tierStatus.blocked_reason && (
+                <p className="text-[10px] text-warning mt-1.5">{tierStatus.blocked_reason}</p>
+              )}
+            </div>
+          </Surface>
+        );
+      })()}
+
       <Surface className="p-5 sm:p-6 border border-primary/20 bg-linear-to-br from-primary/5 via-transparent to-info/10">
         <p className="text-xs font-semibold uppercase tracking-[0.16em] text-primary/70">
           {vm.text.eyebrow}

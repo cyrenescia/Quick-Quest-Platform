@@ -16,6 +16,8 @@ import { PartyLobbyRoomPage } from "./page/party-lobby-room/party-lobby-room.tsx
 import { RunnerMapsLivePage } from "./page/maps-live/maps-live.tsx";
 import { RunnerInsightsPage } from "./page/insights/insights.tsx";
 import { RunnerHistoryPage } from "./page/history/history.tsx";
+import { MetricCenterPage } from "./page/metric-center/metric-center.tsx";
+import { SkillInventoryPage } from "./page/skill-inventory/skill-inventory.tsx";
 
 const runnerNavigatorViews: RunnerSubView["view"][] = [
   "Home",
@@ -24,6 +26,8 @@ const runnerNavigatorViews: RunnerSubView["view"][] = [
   "PartyLobbyRoom",
   "Insights",
   "History",
+  "MetricCenter",
+  "SkillInventory",
   "MapsLive",
 ];
 
@@ -41,6 +45,10 @@ function resolveRunnerNavigatorLabel(view: RunnerSubView["view"]): string {
       return runnerViewText.navigator.insights;
     case "History":
       return "Riwayat";
+    case "MetricCenter":
+      return "Metric Center";
+    case "SkillInventory":
+      return "Skill Inventory";
     case "MapsLive":
       return "Radar Live";
     default:
@@ -173,6 +181,14 @@ function RunnerComponent() {
 
       {subView.view === "History" ? (
         <RunnerHistoryPage onBack={() => setSubView({ view: "Home" })} />
+      ) : null}
+
+      {subView.view === "MetricCenter" ? (
+        <MetricCenterPage onBack={() => setSubView({ view: "Home" })} />
+      ) : null}
+
+      {subView.view === "SkillInventory" ? (
+        <SkillInventoryPage onBack={() => setSubView({ view: "Home" })} />
       ) : null}
 
       {subView.view === "Home" ? (
