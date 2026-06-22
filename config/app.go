@@ -27,6 +27,11 @@ type AppConfig struct {
 	SessionCookieSameSite string
 	SessionCookieSecure   bool
 	AllowedOrigins        []string
+	RunnerQ2MinPP         float64
+	RunnerQ3MinPP         float64
+	RunnerQ3MinSR         float64
+	RunnerRiskLowMax      int
+	RunnerRiskModerateMax int
 }
 
 type AppError struct {
@@ -61,6 +66,11 @@ func LoadAppConfigFromEnv() (AppConfig, error) {
 		RoleCookieName:        FirstNonEmpty(os.Getenv("AUTH_ROLE_COOKIE_NAME"), os.Getenv("ROLE_COOKIE_NAME"), "qqm_role_session"),
 		SessionCookieSameSite: NormalizeSameSite(FirstNonEmpty(os.Getenv("AUTH_COOKIE_SAME_SITE"), os.Getenv("SESSION_COOKIE_SAMESITE"))),
 		SessionCookieSecure:   ToBooleanFlag(FirstNonEmpty(os.Getenv("AUTH_COOKIE_SECURE"), os.Getenv("SESSION_COOKIE_SECURE")), false),
+		RunnerQ2MinPP:         ToFloatFlag(FirstNonEmpty(os.Getenv("RUNNER_Q2_MIN_PP"), os.Getenv("Q2_MIN_PP")), 500),
+		RunnerQ3MinPP:         ToFloatFlag(FirstNonEmpty(os.Getenv("RUNNER_Q3_MIN_PP"), os.Getenv("Q3_MIN_PP")), 2000),
+		RunnerQ3MinSR:         ToFloatFlag(FirstNonEmpty(os.Getenv("RUNNER_Q3_MIN_SR"), os.Getenv("Q3_MIN_SR")), 6),
+		RunnerRiskLowMax:      ToIntFlag(FirstNonEmpty(os.Getenv("RUNNER_RISK_LOW_MAX"), os.Getenv("RISK_LOW_MAX")), 30),
+		RunnerRiskModerateMax: ToIntFlag(FirstNonEmpty(os.Getenv("RUNNER_RISK_MODERATE_MAX"), os.Getenv("RISK_MODERATE_MAX")), 60),
 		AllowedOrigins: []string{
 			"http://localhost:5173",
 			"https://neiraverse.com",
@@ -102,6 +112,34 @@ func ToBooleanFlag(value string, defaultValue bool) bool {
 	default:
 		return defaultValue
 	}
+}
+
+func ToFloatFlag(value string, defaultValue float64) float64 {
+	normalized := strings.TrimSpace(value)
+	if normalized == "" {
+		return defaultValue
+	}
+
+	parsed, err := strconv.ParseFloat(normalized, 64)
+	if err != nil {
+		return defaultValue
+	}
+
+	return parsed
+}
+
+func ToIntFlag(value string, defaultValue int) int {
+	normalized := strings.TrimSpace(value)
+	if normalized == "" {
+		return defaultValue
+	}
+
+	parsed, err := strconv.Atoi(normalized)
+	if err != nil {
+		return defaultValue
+	}
+
+	return parsed
 }
 
 func NormalizeSameSite(value string) string {

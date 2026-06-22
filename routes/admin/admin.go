@@ -2,6 +2,8 @@ package admin
 
 import (
 	"context"
+	"log"
+	"math"
 	"os"
 	"strconv"
 	"strings"
@@ -11,6 +13,17 @@ import (
 
 	"github.com/gofiber/fiber/v3"
 )
+
+type disputePenaltyResult struct {
+	Applied               bool
+	TargetAuthUserID      string
+	TargetParty           string
+	QuestTier             string
+	RequestedPPPenalty    float64
+	AppliedPPPenalty      float64
+	RequestedRiskIncrease int
+	AppliedRiskIncrease   int
+}
 
 func Admin(service *Service) fiber.Handler {
 	return func(c fiber.Ctx) error {
@@ -167,6 +180,11 @@ func handleAdminDisputeMediatePost(c fiber.Ctx, service *Service, ctx context.Co
 		return config.WriteError(c, config.NewAppError("Resolution dispute tidak valid.", fiber.StatusBadRequest), "Gagal memediasi dispute admin.")
 	}
 
+	questRecord, err := service.FindQuestByID(ctx, record.QuestID)
+	if err != nil {
+		return config.WriteError(c, config.MapSupabaseError(err, "Gagal mengambil tier quest dispute cloud."), "Gagal memediasi dispute admin.")
+	}
+
 	escrowAmount := parseFloatOrZero(record.EscrowAmount)
 	giverSettlementAmount, runnerSettlementAmount, mediationFeeAmount := resolveAdminMediationAmounts(nextStatus, escrowAmount)
 	mediatorNote := strings.TrimSpace(config.NormalizeString(body["mediator_note"]))
@@ -193,8 +211,29 @@ func handleAdminDisputeMediatePost(c fiber.Ctx, service *Service, ctx context.Co
 		return config.WriteError(c, config.MapSupabaseError(err, "Gagal memperbarui escrow cloud."), "Gagal memediasi dispute admin.")
 	}
 
+	penaltyResult, penaltyErr := applyDisputePenalty(ctx, service, record, nextStatus, questRecord)
+	penaltyWarning := ""
+	if penaltyErr != nil {
+		penaltyWarning = strings.TrimSpace(penaltyErr.Error())
+		log.Printf("dispute penalty best-effort gagal untuk dispute %s: %v", disputeID, penaltyErr)
+	}
+
 	if err := service.CreateDisputeEvent(ctx, disputeID, "mediator", nextStatus, buildAdminMediationDescription(nextStatus, mediatorNote, adminRecord)); err != nil {
 		return config.WriteError(c, config.MapSupabaseError(err, "Gagal membuat event mediasi cloud."), "Gagal memediasi dispute admin.")
+	}
+	if penaltyResult.Applied {
+		if err := service.CreateDisputeEvent(
+			ctx,
+			disputeID,
+			"mediator",
+			nextStatus,
+			buildPenaltyEventDescription(nextStatus, penaltyResult),
+		); err != nil {
+			if penaltyWarning == "" {
+				penaltyWarning = strings.TrimSpace(err.Error())
+			}
+			log.Printf("event dispute penalty best-effort gagal untuk dispute %s: %v", disputeID, err)
+		}
 	}
 
 	updatedRecord, err := service.FindDisputeCaseByID(ctx, disputeID)
@@ -205,12 +244,212 @@ func handleAdminDisputeMediatePost(c fiber.Ctx, service *Service, ctx context.Co
 	if err != nil {
 		return config.WriteError(c, err, "Gagal memediasi dispute admin.")
 	}
+	payload["penalty"] = toDisputePenaltyPayload(penaltyResult)
+	if penaltyWarning != "" {
+		payload["penalty_warning"] = penaltyWarning
+	}
 
 	return c.JSON(fiber.Map{
 		"success": true,
 		"message": "Keputusan mediasi admin berhasil disimpan.",
 		"data":    payload,
 	})
+}
+
+func applyDisputePenalty(
+	ctx context.Context,
+	service *Service,
+	record *adminDisputeCaseRecord,
+	resolution string,
+	questRecord *adminQuestRecord,
+) (disputePenaltyResult, error) {
+	result := disputePenaltyResult{
+		QuestTier: normalizeAdminQuestTier(resolveAdminQuestTier(questRecord)),
+	}
+	if record == nil {
+		return result, nil
+	}
+
+	ppPenalty, riskIncrease := resolveDisputePenaltyAmounts(resolution, result.QuestTier)
+	result.RequestedPPPenalty = ppPenalty
+	result.RequestedRiskIncrease = riskIncrease
+
+	switch resolution {
+	case "resolved_giver":
+		result.TargetAuthUserID = record.RunnerAuthUserID
+		result.TargetParty = "runner"
+	case "resolved_runner":
+		result.TargetAuthUserID = record.GiverAuthUserID
+		result.TargetParty = "giver"
+	case "dismissed":
+		result.TargetAuthUserID = record.RaisedByAuthUserID
+		result.TargetParty = normalizePenaltyTargetParty(record)
+	default:
+		return result, nil
+	}
+	if strings.TrimSpace(result.TargetAuthUserID) == "" {
+		return result, nil
+	}
+
+	if ppPenalty < 0 {
+		appliedPenalty, err := service.InsertPPPenaltyLedger(
+			ctx,
+			result.TargetAuthUserID,
+			record.ID,
+			record.QuestID,
+			record.AssignmentID,
+			result.QuestTier,
+			ppPenalty,
+		)
+		result.AppliedPPPenalty = appliedPenalty
+		result.Applied = result.AppliedPPPenalty != 0
+		if err != nil {
+			return result, err
+		}
+	}
+
+	appliedRisk, err := service.IncrementUserRiskScore(ctx, result.TargetAuthUserID, riskIncrease)
+	result.AppliedRiskIncrease = appliedRisk
+	result.Applied = result.Applied || result.AppliedRiskIncrease > 0
+	if err != nil {
+		return result, err
+	}
+
+	return result, nil
+}
+
+func resolveDisputePenaltyAmounts(resolution string, questTier string) (float64, int) {
+	if resolution == "dismissed" {
+		return 0, 3
+	}
+	if resolution == "resolved_partial" {
+		return 0, 0
+	}
+
+	riskIncrease := 3
+	ppPenalty := -5.0
+	switch normalizeAdminQuestTier(questTier) {
+	case "Q3":
+		riskIncrease = 20
+		ppPenalty = -40
+	case "Q2":
+		riskIncrease = 8
+		ppPenalty = -15
+	}
+
+	if resolution == "resolved_runner" {
+		return 0, riskIncrease
+	}
+	if resolution == "resolved_giver" {
+		return ppPenalty, riskIncrease
+	}
+	return 0, 0
+}
+
+func resolveAppliedPPPenalty(currentPP float64, requestedPPDelta float64) float64 {
+	if currentPP <= 0 || requestedPPDelta >= 0 {
+		return 0
+	}
+	penaltyMagnitude := math.Abs(requestedPPDelta)
+	if penaltyMagnitude > currentPP {
+		penaltyMagnitude = currentPP
+	}
+	return -roundAdminValue(penaltyMagnitude)
+}
+
+func resolveNextRunnerPP(currentPP float64, appliedPPDelta float64) float64 {
+	return roundAdminValue(math.Max(0, currentPP+appliedPPDelta))
+}
+
+func resolveNextRiskScore(currentRisk int, requestedIncrease int) (int, int) {
+	if currentRisk < 0 {
+		currentRisk = 0
+	}
+	if currentRisk > 100 {
+		currentRisk = 100
+	}
+	if requestedIncrease <= 0 || currentRisk >= 100 {
+		return currentRisk, 0
+	}
+
+	nextRisk := currentRisk + requestedIncrease
+	if nextRisk > 100 {
+		nextRisk = 100
+	}
+	return nextRisk, nextRisk - currentRisk
+}
+
+func normalizeAdminQuestTier(value string) string {
+	switch strings.ToUpper(strings.TrimSpace(value)) {
+	case "Q2":
+		return "Q2"
+	case "Q3":
+		return "Q3"
+	default:
+		return "Q1"
+	}
+}
+
+func normalizePenaltyTargetParty(record *adminDisputeCaseRecord) string {
+	if record == nil {
+		return ""
+	}
+	switch strings.ToLower(strings.TrimSpace(record.RaisedBy)) {
+	case "giver":
+		return "giver"
+	case "runner":
+		return "runner"
+	default:
+		if record.RaisedByAuthUserID == record.GiverAuthUserID {
+			return "giver"
+		}
+		if record.RaisedByAuthUserID == record.RunnerAuthUserID {
+			return "runner"
+		}
+		return "unknown"
+	}
+}
+
+func buildPenaltyEventDescription(resolution string, result disputePenaltyResult) string {
+	parts := []string{
+		"pp_penalty_applied",
+		"resolution=" + strings.ToLower(strings.TrimSpace(resolution)),
+		"target=" + firstNonEmptyAdmin(result.TargetParty, "unknown"),
+		"quest_tier=" + normalizeAdminQuestTier(result.QuestTier),
+	}
+	if result.AppliedPPPenalty != 0 {
+		parts = append(parts, "pp_delta="+strconv.FormatFloat(result.AppliedPPPenalty, 'f', 2, 64))
+	}
+	if result.AppliedRiskIncrease > 0 {
+		parts = append(parts, "risk_increase=+"+strconv.Itoa(result.AppliedRiskIncrease))
+	}
+	return strings.Join(parts, " | ")
+}
+
+func toDisputePenaltyPayload(result disputePenaltyResult) fiber.Map {
+	return fiber.Map{
+		"applied":                 result.Applied,
+		"target_auth_user_id":     result.TargetAuthUserID,
+		"target_party":            result.TargetParty,
+		"quest_tier":              result.QuestTier,
+		"requested_pp_penalty":    result.RequestedPPPenalty,
+		"applied_pp_penalty":      result.AppliedPPPenalty,
+		"requested_risk_increase": result.RequestedRiskIncrease,
+		"applied_risk_increase":   result.AppliedRiskIncrease,
+	}
+}
+
+func roundAdminValue(value float64) float64 {
+	return math.Round(value*100) / 100
+}
+
+func firstNonEmptyAdmin(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return strings.TrimSpace(value)
+		}
+	}
+	return ""
 }
 
 func handleAdminAutoReleasePost(c fiber.Ctx, service *Service, ctx context.Context, body map[string]any) error {
@@ -851,6 +1090,13 @@ func resolveAdminQuestStatus(record *adminQuestRecord) string {
 		return ""
 	}
 	return record.Status
+}
+
+func resolveAdminQuestTier(record *adminQuestRecord) string {
+	if record == nil {
+		return "Q1"
+	}
+	return normalizeAdminQuestTier(record.QuestTier)
 }
 
 func toAdminUserPayload(user *userRecord, fallbackAuthUserID string) fiber.Map {

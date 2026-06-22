@@ -3,17 +3,22 @@ package rating
 import (
 	"context"
 	"encoding/json"
+	"math"
+	"strconv"
 	"strings"
 	"time"
 
 	"Stream-StrictMode/config"
+	questclassification "Stream-StrictMode/routes/quest-classification"
+	runnertier "Stream-StrictMode/routes/runner-tier"
 
 	"github.com/google/uuid"
 )
 
 type Service struct {
-	client *config.SupabaseClient
-	cfg    config.AppConfig
+	client      *config.SupabaseClient
+	cfg         config.AppConfig
+	tierService *runnertier.Service
 }
 
 type authSessionRecord struct {
@@ -30,6 +35,9 @@ type questRecord struct {
 	Category        string
 	SkillTags       []string
 	Status          string
+	QuestTier       string
+	TierScore       int
+	RewardAmount    float64
 }
 
 type assignmentRecord struct {
@@ -68,12 +76,18 @@ type createRatingPayload struct {
 	RatingNote      string
 	SkillScope      string
 	PPDelta         float64
+	QuestTier       string
+	TierScore       int
+	RunnerTier      string
+	RewardAmount    float64
+	FinishedAt      *time.Time
 }
 
 func NewService(client *config.SupabaseClient, cfg config.AppConfig) *Service {
 	return &Service{
-		client: client,
-		cfg:    cfg,
+		client:      client,
+		cfg:         cfg,
+		tierService: runnertier.NewService(client, cfg),
 	}
 }
 
@@ -117,7 +131,7 @@ func (s *Service) FindAssignmentByID(ctx context.Context, assignmentID string) (
 }
 
 func (s *Service) FindQuestByID(ctx context.Context, questID string) (*questRecord, error) {
-	row, err := s.client.SelectFirst(ctx, "quests", "id,giver_auth_user_id,title,category,skill_tags,status", map[string]string{
+	row, err := s.client.SelectFirst(ctx, "quests", "id,giver_auth_user_id,title,category,skill_tags,status,quest_tier,tier_score,reward_amount", map[string]string{
 		"id": questID,
 	})
 	if err != nil {
@@ -134,6 +148,9 @@ func (s *Service) FindQuestByID(ctx context.Context, questID string) (*questReco
 		Category:        config.NormalizeString(row["category"]),
 		SkillTags:       parseStringArray(row["skill_tags"]),
 		Status:          config.NormalizeString(row["status"]),
+		QuestTier:       questclassification.NormalizeTier(config.NormalizeString(row["quest_tier"])),
+		TierScore:       parseIntValue(row["tier_score"]),
+		RewardAmount:    parseFloatValue(row["reward_amount"]),
 	}, nil
 }
 
@@ -171,7 +188,21 @@ func (s *Service) FindRatingByAssignmentAndRater(ctx context.Context, assignment
 	}, nil
 }
 
-func (s *Service) CreateRatingWithPPLedger(ctx context.Context, payload createRatingPayload) error {
+func (s *Service) FindRunnerTier(ctx context.Context, authUserID string) (string, error) {
+	row, err := s.client.SelectFirst(ctx, "user_identification", "runner_tier", map[string]string{
+		"auth_user_id": authUserID,
+	})
+	if err != nil {
+		return questclassification.TierQ1, err
+	}
+	if row == nil {
+		return questclassification.TierQ1, nil
+	}
+
+	return questclassification.NormalizeTier(config.NormalizeString(row["runner_tier"])), nil
+}
+
+func (s *Service) CreateRatingWithPPLedger(ctx context.Context, payload createRatingPayload, ppResult ppWeightedResult) error {
 	now := time.Now().UTC()
 	ratingID := payload.RatingID
 	if strings.TrimSpace(ratingID) == "" {
@@ -206,8 +237,20 @@ func (s *Service) CreateRatingWithPPLedger(ctx context.Context, payload createRa
 		"pp_delta":      payload.PPDelta,
 		"reason":        buildPPReason(payload),
 		"metadata": map[string]any{
-			"rating_score": payload.RatingScore,
-			"rater_role":   payload.RaterRole,
+			"rating_score":         payload.RatingScore,
+			"rater_role":           payload.RaterRole,
+			"quest_tier":           questclassification.NormalizeTier(payload.QuestTier),
+			"tier_score":           payload.TierScore,
+			"runner_tier":          questclassification.NormalizeTier(payload.RunnerTier),
+			"tier_multiplier":      ppResult.TierMultiplier,
+			"challenge_bonus":      ppResult.ChallengeBonus,
+			"value_multiplier":     ppResult.ValueMultiplier,
+			"time_decay":           ppResult.TimeDecay,
+			"base_pp":              ppResult.BasePP,
+			"pp_delta_final":       ppResult.PPDelta,
+			"reward_amount":        payload.RewardAmount,
+			"finished_at":          optionalTimeMetadata(payload.FinishedAt),
+			"min_pp_floor_applied": ppResult.MinPPFloorApplied,
 		},
 		"created_at": now,
 	}); err != nil {
@@ -216,6 +259,10 @@ func (s *Service) CreateRatingWithPPLedger(ctx context.Context, payload createRa
 	}
 
 	return nil
+}
+
+func (s *Service) ApplyRunnerRatingProgression(ctx context.Context, runnerAuthUserID string, ppDelta float64) (*runnertier.ProgressionResult, error) {
+	return s.tierService.ApplyRatingProgression(ctx, runnerAuthUserID, ppDelta)
 }
 
 func (s *Service) CountUniqueRatingsByAssignment(ctx context.Context, assignmentID string) (*ratingLifecycleSummary, error) {
@@ -321,6 +368,83 @@ func parseStringArray(value any) []string {
 	default:
 		return []string{}
 	}
+}
+
+func parseFloatValue(value any) float64 {
+	switch typed := value.(type) {
+	case nil:
+		return 0
+	case json.Number:
+		parsed, err := typed.Float64()
+		if err != nil {
+			return 0
+		}
+		return parsed
+	case float64:
+		return typed
+	case float32:
+		return float64(typed)
+	case int:
+		return float64(typed)
+	case int64:
+		return float64(typed)
+	case string:
+		parsed, err := strconv.ParseFloat(strings.TrimSpace(typed), 64)
+		if err != nil {
+			return 0
+		}
+		return parsed
+	default:
+		parsed, err := strconv.ParseFloat(config.NormalizeString(value), 64)
+		if err != nil {
+			return 0
+		}
+		return parsed
+	}
+}
+
+func parseIntValue(value any) int {
+	switch typed := value.(type) {
+	case nil:
+		return 0
+	case json.Number:
+		parsed, err := typed.Int64()
+		if err == nil {
+			return int(parsed)
+		}
+		fallback, fallbackErr := typed.Float64()
+		if fallbackErr != nil {
+			return 0
+		}
+		return int(math.Round(fallback))
+	case float64:
+		return int(math.Round(typed))
+	case float32:
+		return int(math.Round(float64(typed)))
+	case int:
+		return typed
+	case int64:
+		return int(typed)
+	case string:
+		parsed, err := strconv.Atoi(strings.TrimSpace(typed))
+		if err == nil {
+			return parsed
+		}
+		fallback, fallbackErr := strconv.ParseFloat(strings.TrimSpace(typed), 64)
+		if fallbackErr != nil {
+			return 0
+		}
+		return int(math.Round(fallback))
+	default:
+		return 0
+	}
+}
+
+func optionalTimeMetadata(value *time.Time) any {
+	if value == nil || value.IsZero() {
+		return nil
+	}
+	return value.UTC()
 }
 
 func nullIfEmpty(value string) any {

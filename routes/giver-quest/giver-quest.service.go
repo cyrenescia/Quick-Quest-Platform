@@ -7,13 +7,15 @@ import (
 	"time"
 
 	"Stream-StrictMode/config"
+	questclassification "Stream-StrictMode/routes/quest-classification"
 
 	"github.com/google/uuid"
 )
 
 type Service struct {
-	client *config.SupabaseClient
-	cfg    config.AppConfig
+	client     *config.SupabaseClient
+	cfg        config.AppConfig
+	classifier questclassification.QuestClassifier
 }
 
 type authSessionRecord struct {
@@ -29,31 +31,44 @@ type userRoleRecord struct {
 }
 
 type questRecord struct {
-	ID                 string
-	GiverAuthUserID    string
-	Title              string
-	Description        string
-	Category           string
-	SkillTags          []string
-	Mode               string
-	Status             string
-	RewardAmount       string
-	RewardCurrency     string
-	Province           string
-	City               string
-	District           string
-	SubDistrict        string
-	FullAddress        string
-	PostalCode         string
-	Lat                string
-	Lng                string
-	MaxRunner          string
-	CurrentRunnerCount string
-	StartsAt           *time.Time
-	EndsAt             *time.Time
-	PublishedAt        *time.Time
-	CreatedAt          *time.Time
-	UpdatedAt          *time.Time
+	ID                   string
+	GiverAuthUserID      string
+	Title                string
+	Description          string
+	Category             string
+	SkillTags            []string
+	Mode                 string
+	Status               string
+	RewardAmount         string
+	RewardCurrency       string
+	ContractType         string
+	ContractDurationDays string
+	ReqEducation         string
+	ReqEducationDetail   string
+	ReqPortfolio         string
+	ReqIdentityLevel     string
+	ReqDocuments         []string
+	QuestTier            string
+	TierScore            string
+	TierStatus           string
+	TierClassifiedAt     *time.Time
+	TierVerifiedBy       string
+	TierOverrideNote     string
+	Province             string
+	City                 string
+	District             string
+	SubDistrict          string
+	FullAddress          string
+	PostalCode           string
+	Lat                  string
+	Lng                  string
+	MaxRunner            string
+	CurrentRunnerCount   string
+	StartsAt             *time.Time
+	EndsAt               *time.Time
+	PublishedAt          *time.Time
+	CreatedAt            *time.Time
+	UpdatedAt            *time.Time
 }
 
 type escrowRecord struct {
@@ -101,33 +116,43 @@ type questRatingStateRecord struct {
 }
 
 type createQuestPayload struct {
-	Title          string
-	Description    string
-	Category       string
-	SkillTags      []string
-	Mode           string
-	Status         string
-	RewardAmount   float64
-	RewardCurrency string
-	Province       string
-	City           string
-	District       string
-	SubDistrict    string
-	FullAddress    string
-	PostalCode     string
-	Lat            *float64
-	Lng            *float64
-	MaxRunner      int
-	StartsAt       *time.Time
-	EndsAt         *time.Time
+	Title                string
+	Description          string
+	Category             string
+	SkillTags            []string
+	Mode                 string
+	Status               string
+	RewardAmount         float64
+	RewardCurrency       string
+	ContractType         string
+	ContractDurationDays *int
+	ReqEducation         string
+	ReqEducationDetail   string
+	ReqPortfolio         string
+	ReqIdentityLevel     string
+	ReqDocuments         []string
+	Province             string
+	City                 string
+	District             string
+	SubDistrict          string
+	FullAddress          string
+	PostalCode           string
+	Lat                  *float64
+	Lng                  *float64
+	MaxRunner            int
+	StartsAt             *time.Time
+	EndsAt               *time.Time
 }
 
 const platformFeePercent = 5
 
+const giverQuestSelectColumns = "id,giver_auth_user_id,title,description,category,skill_tags,mode,status,reward_amount,reward_currency,contract_type,contract_duration_days,req_education,req_education_detail,req_portfolio,req_identity_level,req_documents,quest_tier,tier_score,tier_status,tier_classified_at,tier_verified_by,tier_override_note,province,city,district,sub_district,full_address,postal_code,lat,lng,max_runner,current_runner_count,starts_at,ends_at,published_at,created_at,updated_at"
+
 func NewService(client *config.SupabaseClient, cfg config.AppConfig) *Service {
 	return &Service{
-		client: client,
-		cfg:    cfg,
+		client:     client,
+		cfg:        cfg,
+		classifier: questclassification.NewRuleBasedClassifier(),
 	}
 }
 
@@ -171,7 +196,7 @@ func (s *Service) FindQuestByID(ctx context.Context, questID string) (*questReco
 	row, err := s.client.SelectFirst(
 		ctx,
 		"quests",
-		"id,giver_auth_user_id,title,description,category,skill_tags,mode,status,reward_amount,reward_currency,province,city,district,sub_district,full_address,postal_code,lat,lng,max_runner,current_runner_count,starts_at,ends_at,published_at,created_at,updated_at",
+		giverQuestSelectColumns,
 		map[string]string{"id": questID},
 	)
 	if err != nil {
@@ -191,31 +216,45 @@ func (s *Service) CreateQuestDraft(ctx context.Context, authRecord *authSessionR
 	rewardAmount := roundCurrency(payload.RewardAmount * float64(payload.MaxRunner))
 	platformFeeAmount := roundCurrency(rewardAmount * float64(platformFeePercent) / 100)
 	totalAmount := roundCurrency(rewardAmount + platformFeeAmount)
+	classification := s.classifyQuestPayload(payload)
 	insertPayload := map[string]any{
-		"id":                   questID,
-		"giver_auth_user_id":   authRecord.AuthUserID,
-		"title":                payload.Title,
-		"description":          payload.Description,
-		"category":             nullIfEmpty(payload.Category),
-		"skill_tags":           payload.SkillTags,
-		"mode":                 payload.Mode,
-		"status":               "draft",
-		"reward_amount":        payload.RewardAmount,
-		"reward_currency":      firstNonEmpty(payload.RewardCurrency, "IDR"),
-		"province":             nullIfEmpty(payload.Province),
-		"city":                 nullIfEmpty(payload.City),
-		"district":             nullIfEmpty(payload.District),
-		"sub_district":         nullIfEmpty(payload.SubDistrict),
-		"full_address":         nullIfEmpty(payload.FullAddress),
-		"postal_code":          nullIfEmpty(payload.PostalCode),
-		"lat":                  optionalFloat64Value(payload.Lat),
-		"lng":                  optionalFloat64Value(payload.Lng),
-		"max_runner":           payload.MaxRunner,
-		"current_runner_count": 0,
-		"starts_at":            optionalTimeValue(payload.StartsAt),
-		"ends_at":              optionalTimeValue(payload.EndsAt),
-		"created_at":           now,
-		"updated_at":           now,
+		"id":                     questID,
+		"giver_auth_user_id":     authRecord.AuthUserID,
+		"title":                  payload.Title,
+		"description":            payload.Description,
+		"category":               nullIfEmpty(payload.Category),
+		"skill_tags":             payload.SkillTags,
+		"mode":                   payload.Mode,
+		"status":                 "draft",
+		"reward_amount":          payload.RewardAmount,
+		"reward_currency":        firstNonEmpty(payload.RewardCurrency, "IDR"),
+		"contract_type":          payload.ContractType,
+		"contract_duration_days": optionalIntValue(payload.ContractDurationDays),
+		"req_education":          payload.ReqEducation,
+		"req_education_detail":   nullIfEmpty(payload.ReqEducationDetail),
+		"req_portfolio":          payload.ReqPortfolio,
+		"req_identity_level":     payload.ReqIdentityLevel,
+		"req_documents":          optionalStringArrayValue(payload.ReqDocuments),
+		"quest_tier":             classification.Tier,
+		"tier_score":             classification.Score,
+		"tier_status":            classification.Status,
+		"tier_classified_at":     now,
+		"tier_verified_by":       nil,
+		"tier_override_note":     nil,
+		"province":               nullIfEmpty(payload.Province),
+		"city":                   nullIfEmpty(payload.City),
+		"district":               nullIfEmpty(payload.District),
+		"sub_district":           nullIfEmpty(payload.SubDistrict),
+		"full_address":           nullIfEmpty(payload.FullAddress),
+		"postal_code":            nullIfEmpty(payload.PostalCode),
+		"lat":                    optionalFloat64Value(payload.Lat),
+		"lng":                    optionalFloat64Value(payload.Lng),
+		"max_runner":             payload.MaxRunner,
+		"current_runner_count":   0,
+		"starts_at":              optionalTimeValue(payload.StartsAt),
+		"ends_at":                optionalTimeValue(payload.EndsAt),
+		"created_at":             now,
+		"updated_at":             now,
 	}
 
 	if err := s.client.Insert(ctx, "quests", insertPayload); err != nil {
@@ -243,26 +282,40 @@ func (s *Service) CreateQuestDraft(ctx context.Context, authRecord *authSessionR
 
 func (s *Service) UpdateQuestDraft(ctx context.Context, questID string, payload createQuestPayload) error {
 	now := time.Now().UTC()
+	classification := s.classifyQuestPayload(payload)
 	updatePayload := map[string]any{
-		"title":           payload.Title,
-		"description":     payload.Description,
-		"category":        nullIfEmpty(payload.Category),
-		"skill_tags":      payload.SkillTags,
-		"mode":            payload.Mode,
-		"reward_amount":   payload.RewardAmount,
-		"reward_currency": firstNonEmpty(payload.RewardCurrency, "IDR"),
-		"province":        nullIfEmpty(payload.Province),
-		"city":            nullIfEmpty(payload.City),
-		"district":        nullIfEmpty(payload.District),
-		"sub_district":    nullIfEmpty(payload.SubDistrict),
-		"full_address":    nullIfEmpty(payload.FullAddress),
-		"postal_code":     nullIfEmpty(payload.PostalCode),
-		"lat":             optionalFloat64Value(payload.Lat),
-		"lng":             optionalFloat64Value(payload.Lng),
-		"max_runner":      payload.MaxRunner,
-		"starts_at":       optionalTimeValue(payload.StartsAt),
-		"ends_at":         optionalTimeValue(payload.EndsAt),
-		"updated_at":      now,
+		"title":                  payload.Title,
+		"description":            payload.Description,
+		"category":               nullIfEmpty(payload.Category),
+		"skill_tags":             payload.SkillTags,
+		"mode":                   payload.Mode,
+		"reward_amount":          payload.RewardAmount,
+		"reward_currency":        firstNonEmpty(payload.RewardCurrency, "IDR"),
+		"contract_type":          payload.ContractType,
+		"contract_duration_days": optionalIntValue(payload.ContractDurationDays),
+		"req_education":          payload.ReqEducation,
+		"req_education_detail":   nullIfEmpty(payload.ReqEducationDetail),
+		"req_portfolio":          payload.ReqPortfolio,
+		"req_identity_level":     payload.ReqIdentityLevel,
+		"req_documents":          optionalStringArrayValue(payload.ReqDocuments),
+		"quest_tier":             classification.Tier,
+		"tier_score":             classification.Score,
+		"tier_status":            classification.Status,
+		"tier_classified_at":     now,
+		"tier_verified_by":       nil,
+		"tier_override_note":     nil,
+		"province":               nullIfEmpty(payload.Province),
+		"city":                   nullIfEmpty(payload.City),
+		"district":               nullIfEmpty(payload.District),
+		"sub_district":           nullIfEmpty(payload.SubDistrict),
+		"full_address":           nullIfEmpty(payload.FullAddress),
+		"postal_code":            nullIfEmpty(payload.PostalCode),
+		"lat":                    optionalFloat64Value(payload.Lat),
+		"lng":                    optionalFloat64Value(payload.Lng),
+		"max_runner":             payload.MaxRunner,
+		"starts_at":              optionalTimeValue(payload.StartsAt),
+		"ends_at":                optionalTimeValue(payload.EndsAt),
+		"updated_at":             now,
 	}
 
 	if err := s.client.Update(ctx, "quests", map[string]string{"id": questID}, updatePayload); err != nil {
@@ -290,7 +343,7 @@ func (s *Service) ListGiverQuests(ctx context.Context, authUserID string) ([]que
 	rows, err := s.client.SelectMany(
 		ctx,
 		"quests",
-		"id,giver_auth_user_id,title,description,category,skill_tags,mode,status,reward_amount,reward_currency,province,city,district,sub_district,full_address,postal_code,lat,lng,max_runner,current_runner_count,starts_at,ends_at,published_at,created_at,updated_at",
+		giverQuestSelectColumns,
 		map[string]string{"giver_auth_user_id": authUserID},
 		&config.SelectOptions{OrderBy: "created_at", Desc: true, Limit: 100},
 	)
@@ -417,33 +470,61 @@ func (s *Service) UpdateQuestEscrowState(ctx context.Context, questID string, ne
 	}, payload)
 }
 
+func (s *Service) classifyQuestPayload(payload createQuestPayload) questclassification.ClassificationResult {
+	return s.classifier.Classify(questclassification.ClassificationInput{
+		ContractType:         payload.ContractType,
+		ContractDurationDays: payload.ContractDurationDays,
+		ReqEducation:         payload.ReqEducation,
+		ReqEducationDetail:   payload.ReqEducationDetail,
+		ReqPortfolio:         payload.ReqPortfolio,
+		ReqIdentityLevel:     payload.ReqIdentityLevel,
+		ReqDocuments:         payload.ReqDocuments,
+		RewardAmount:         payload.RewardAmount,
+		Description:          payload.Description,
+		SkillTags:            payload.SkillTags,
+	})
+}
+
 func mapQuestRecord(row map[string]any) questRecord {
 	return questRecord{
-		ID:                 config.NormalizeString(row["id"]),
-		GiverAuthUserID:    config.NormalizeString(row["giver_auth_user_id"]),
-		Title:              config.NormalizeString(row["title"]),
-		Description:        config.NormalizeString(row["description"]),
-		Category:           config.NormalizeString(row["category"]),
-		SkillTags:          parseStringArray(row["skill_tags"]),
-		Mode:               config.NormalizeString(row["mode"]),
-		Status:             config.NormalizeString(row["status"]),
-		RewardAmount:       config.NormalizeString(row["reward_amount"]),
-		RewardCurrency:     config.NormalizeString(row["reward_currency"]),
-		Province:           config.NormalizeString(row["province"]),
-		City:               config.NormalizeString(row["city"]),
-		District:           config.NormalizeString(row["district"]),
-		SubDistrict:        config.NormalizeString(row["sub_district"]),
-		FullAddress:        config.NormalizeString(row["full_address"]),
-		PostalCode:         config.NormalizeString(row["postal_code"]),
-		Lat:                config.NormalizeString(row["lat"]),
-		Lng:                config.NormalizeString(row["lng"]),
-		MaxRunner:          config.NormalizeString(row["max_runner"]),
-		CurrentRunnerCount: config.NormalizeString(row["current_runner_count"]),
-		StartsAt:           parseOptionalTime(row["starts_at"]),
-		EndsAt:             parseOptionalTime(row["ends_at"]),
-		PublishedAt:        parseOptionalTime(row["published_at"]),
-		CreatedAt:          parseOptionalTime(row["created_at"]),
-		UpdatedAt:          parseOptionalTime(row["updated_at"]),
+		ID:                   config.NormalizeString(row["id"]),
+		GiverAuthUserID:      config.NormalizeString(row["giver_auth_user_id"]),
+		Title:                config.NormalizeString(row["title"]),
+		Description:          config.NormalizeString(row["description"]),
+		Category:             config.NormalizeString(row["category"]),
+		SkillTags:            parseStringArray(row["skill_tags"]),
+		Mode:                 config.NormalizeString(row["mode"]),
+		Status:               config.NormalizeString(row["status"]),
+		RewardAmount:         config.NormalizeString(row["reward_amount"]),
+		RewardCurrency:       config.NormalizeString(row["reward_currency"]),
+		ContractType:         config.NormalizeString(row["contract_type"]),
+		ContractDurationDays: config.NormalizeString(row["contract_duration_days"]),
+		ReqEducation:         config.NormalizeString(row["req_education"]),
+		ReqEducationDetail:   config.NormalizeString(row["req_education_detail"]),
+		ReqPortfolio:         config.NormalizeString(row["req_portfolio"]),
+		ReqIdentityLevel:     config.NormalizeString(row["req_identity_level"]),
+		ReqDocuments:         parseStringArray(row["req_documents"]),
+		QuestTier:            config.NormalizeString(row["quest_tier"]),
+		TierScore:            config.NormalizeString(row["tier_score"]),
+		TierStatus:           config.NormalizeString(row["tier_status"]),
+		TierClassifiedAt:     parseOptionalTime(row["tier_classified_at"]),
+		TierVerifiedBy:       config.NormalizeString(row["tier_verified_by"]),
+		TierOverrideNote:     config.NormalizeString(row["tier_override_note"]),
+		Province:             config.NormalizeString(row["province"]),
+		City:                 config.NormalizeString(row["city"]),
+		District:             config.NormalizeString(row["district"]),
+		SubDistrict:          config.NormalizeString(row["sub_district"]),
+		FullAddress:          config.NormalizeString(row["full_address"]),
+		PostalCode:           config.NormalizeString(row["postal_code"]),
+		Lat:                  config.NormalizeString(row["lat"]),
+		Lng:                  config.NormalizeString(row["lng"]),
+		MaxRunner:            config.NormalizeString(row["max_runner"]),
+		CurrentRunnerCount:   config.NormalizeString(row["current_runner_count"]),
+		StartsAt:             parseOptionalTime(row["starts_at"]),
+		EndsAt:               parseOptionalTime(row["ends_at"]),
+		PublishedAt:          parseOptionalTime(row["published_at"]),
+		CreatedAt:            parseOptionalTime(row["created_at"]),
+		UpdatedAt:            parseOptionalTime(row["updated_at"]),
 	}
 }
 
@@ -540,6 +621,20 @@ func optionalFloat64Value(value *float64) any {
 		return nil
 	}
 	return *value
+}
+
+func optionalIntValue(value *int) any {
+	if value == nil {
+		return nil
+	}
+	return *value
+}
+
+func optionalStringArrayValue(values []string) any {
+	if len(values) == 0 {
+		return nil
+	}
+	return values
 }
 
 func nullIfEmpty(value string) any {

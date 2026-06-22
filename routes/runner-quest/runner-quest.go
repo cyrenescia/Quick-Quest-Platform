@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"Stream-StrictMode/config"
+	questclassification "Stream-StrictMode/routes/quest-classification"
 
 	"github.com/gofiber/fiber/v3"
 )
@@ -21,12 +22,21 @@ const (
 
 type runnerQuestMatchingContext struct {
 	RunnerAuthUserID string
+	RunnerTier       string
 	RunnerLat        *float64
 	RunnerLng        *float64
 	Province         string
 	City             string
 	District         string
 	SubDistrict      string
+}
+
+type runnerQuestTierAccessMeta struct {
+	RunnerTier string
+	QuestTier  string
+	TierScore  int
+	Accessible bool
+	Reason     string
 }
 
 type runnerQuestMatchMeta struct {
@@ -54,6 +64,9 @@ func RunnerQuest(service *Service) fiber.Handler {
 }
 
 func handleRunnerQuestGet(c fiber.Ctx, service *Service) error {
+	if strings.HasSuffix(c.Path(), "/tier-status") {
+		return handleRunnerTierStatusGet(c, service)
+	}
 	if strings.HasSuffix(c.Path(), "/history") {
 		return handleRunnerQuestHistoryGet(c, service)
 	}
@@ -122,6 +135,28 @@ func handleRunnerQuestGet(c fiber.Ctx, service *Service) error {
 			"runner_auth_user_id": authRecord.AuthUserID,
 			"items":               items,
 			"total":               len(items),
+		},
+	})
+}
+
+func handleRunnerTierStatusGet(c fiber.Ctx, service *Service) error {
+	ctx, cancel, authRecord, err := resolveRunnerQuestContext(c, service)
+	if err != nil {
+		return config.WriteError(c, err, "Gagal mengambil status tier runner.")
+	}
+	defer cancel()
+
+	tierStatus, err := service.GetRunnerTierStatus(ctx, authRecord.AuthUserID)
+	if err != nil {
+		return config.WriteError(c, config.MapSupabaseError(err, "Gagal mengambil status tier runner cloud."), "Gagal mengambil status tier runner.")
+	}
+
+	return c.JSON(fiber.Map{
+		"success": true,
+		"message": "Status tier runner berhasil diambil.",
+		"data": fiber.Map{
+			"runner_auth_user_id": authRecord.AuthUserID,
+			"tier_status":         tierStatus,
 		},
 	})
 }
@@ -237,6 +272,11 @@ func handleRunnerQuestPost(c fiber.Ctx, service *Service) error {
 	if err != nil {
 		return config.WriteError(c, err, "Gagal mengambil quest runner.")
 	}
+	tierAccess := evaluateRunnerQuestTierAccess(*questRecord, matchContext)
+	if !tierAccess.Accessible {
+		return config.WriteError(c, config.NewAppError(tierAccess.Reason, fiber.StatusForbidden), "Gagal mengambil quest runner.")
+	}
+
 	matchMeta := evaluateRunnerQuestMatch(*questRecord, matchContext)
 	if !matchMeta.Matched {
 		return config.WriteError(c, config.NewAppError(buildRunnerQuestRadiusRejectMessage(matchMeta), fiber.StatusConflict), "Gagal mengambil quest runner.")
@@ -266,6 +306,11 @@ func handleRunnerQuestPost(c fiber.Ctx, service *Service) error {
 			"current_runner_count": currentCount,
 			"max_runner":           maxRunner,
 			"assignment_status":    "pending",
+			"quest_tier":           tierAccess.QuestTier,
+			"tier_score":           tierAccess.TierScore,
+			"runner_tier":          tierAccess.RunnerTier,
+			"is_accessible":        tierAccess.Accessible,
+			"accessibility_reason": tierAccess.Reason,
 			"matching": fiber.Map{
 				"within_match_radius":    matchMeta.Matched,
 				"matching_scope":         matchMeta.Scope,
@@ -439,6 +484,7 @@ func resolveRunnerQuestContext(c fiber.Ctx, service *Service) (context.Context, 
 func buildRunnerQuestMatchingContext(c fiber.Ctx, service *Service, ctx context.Context, authRecord *authSessionRecord) (*runnerQuestMatchingContext, error) {
 	matchContext := &runnerQuestMatchingContext{
 		RunnerAuthUserID: authRecord.AuthUserID,
+		RunnerTier:       questclassification.TierQ1,
 	}
 
 	if runnerLat := strings.TrimSpace(c.Query("runner_lat")); runnerLat != "" {
@@ -462,6 +508,7 @@ func buildRunnerQuestMatchingContext(c fiber.Ctx, service *Service, ctx context.
 		return nil, config.MapSupabaseError(err, "Gagal mengambil profil lokasi runner cloud.")
 	}
 	if locationProfile != nil {
+		matchContext.RunnerTier = questclassification.NormalizeTier(locationProfile.RunnerTier)
 		matchContext.Province = locationProfile.Province
 		matchContext.City = locationProfile.City
 		matchContext.District = locationProfile.District
@@ -469,6 +516,30 @@ func buildRunnerQuestMatchingContext(c fiber.Ctx, service *Service, ctx context.
 	}
 
 	return matchContext, nil
+}
+
+func evaluateRunnerQuestTierAccess(record questRecord, matchContext *runnerQuestMatchingContext) runnerQuestTierAccessMeta {
+	runnerTier := questclassification.TierQ1
+	if matchContext != nil {
+		runnerTier = questclassification.NormalizeTier(matchContext.RunnerTier)
+	}
+
+	questTier := questclassification.NormalizeTier(record.QuestTier)
+	tierScore := parseOrZeroInt(record.TierScore)
+	accessible := questclassification.CanRunnerAccessQuestTier(runnerTier, questTier)
+	reason := questclassification.BuildTierAccessReason(runnerTier, questTier, accessible)
+	if strings.EqualFold(strings.TrimSpace(record.TierStatus), questclassification.StatusPendingReview) {
+		accessible = false
+		reason = "Quest menunggu review admin Q-Tier sebelum bisa diakses Runner."
+	}
+
+	return runnerQuestTierAccessMeta{
+		RunnerTier: runnerTier,
+		QuestTier:  questTier,
+		TierScore:  tierScore,
+		Accessible: accessible,
+		Reason:     reason,
+	}
 }
 
 func evaluateRunnerQuestMatch(record questRecord, matchContext *runnerQuestMatchingContext) *runnerQuestMatchMeta {
@@ -685,6 +756,9 @@ func toRunnerQuestItem(record questRecord, giver *giverSummaryRecord) fiber.Map 
 		"reward_amount":   record.RewardAmount,
 		"reward_currency": firstNonEmpty(record.RewardCurrency, "IDR"),
 		"reward_display":  buildRewardDisplay(record.RewardAmount, record.RewardCurrency),
+		"quest_tier":      questclassification.NormalizeTier(record.QuestTier),
+		"tier_score":      parseOrZeroInt(record.TierScore),
+		"tier_status":     firstNonEmpty(record.TierStatus, questclassification.StatusAutoClassified),
 		"giver": fiber.Map{
 			"auth_user_id": record.GiverAuthUserID,
 			"fullname":     resolveDisplayName(giver),

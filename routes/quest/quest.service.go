@@ -32,6 +32,9 @@ type questRecord struct {
 	Status             string
 	RewardAmount       string
 	RewardCurrency     string
+	QuestTier          string
+	TierScore          string
+	TierStatus         string
 	Province           string
 	City               string
 	District           string
@@ -58,6 +61,7 @@ type giverSummaryRecord struct {
 
 type runnerLocationProfile struct {
 	AuthUserID  string
+	RunnerTier  string
 	Province    string
 	City        string
 	District    string
@@ -65,6 +69,8 @@ type runnerLocationProfile struct {
 	PostalCode  string
 	FullAddress string
 }
+
+const questSelectColumns = "id,giver_auth_user_id,title,description,category,skill_tags,mode,status,reward_amount,reward_currency,quest_tier,tier_score,tier_status,province,city,district,sub_district,full_address,postal_code,lat,lng,max_runner,current_runner_count,starts_at,ends_at,published_at,created_at,updated_at"
 
 func NewService(client *config.SupabaseClient, cfg config.AppConfig) *Service {
 	return &Service{
@@ -96,7 +102,7 @@ func (s *Service) ListOpenQuests(ctx context.Context) ([]questRecord, error) {
 	rows, err := s.client.SelectMany(
 		ctx,
 		"quests",
-		"id,giver_auth_user_id,title,description,category,skill_tags,mode,status,reward_amount,reward_currency,province,city,district,sub_district,full_address,postal_code,lat,lng,max_runner,current_runner_count,starts_at,ends_at,published_at,created_at,updated_at",
+		questSelectColumns,
 		map[string]string{"status": "open"},
 		&config.SelectOptions{OrderBy: "created_at", Desc: true, Limit: 100},
 	)
@@ -115,7 +121,7 @@ func (s *Service) FindQuestByID(ctx context.Context, questID string) (*questReco
 	row, err := s.client.SelectFirst(
 		ctx,
 		"quests",
-		"id,giver_auth_user_id,title,description,category,skill_tags,mode,status,reward_amount,reward_currency,province,city,district,sub_district,full_address,postal_code,lat,lng,max_runner,current_runner_count,starts_at,ends_at,published_at,created_at,updated_at",
+		questSelectColumns,
 		map[string]string{"id": questID},
 	)
 	if err != nil {
@@ -152,7 +158,7 @@ func (s *Service) FindRunnerLocationProfile(ctx context.Context, authUserID stri
 	row, err := s.client.SelectFirst(
 		ctx,
 		"user_identification",
-		"auth_user_id,province,city,district,sub_district,postal_code,full_address",
+		"auth_user_id,runner_tier,province,city,district,sub_district,postal_code,full_address",
 		map[string]string{"auth_user_id": authUserID},
 	)
 	if err != nil {
@@ -164,6 +170,7 @@ func (s *Service) FindRunnerLocationProfile(ctx context.Context, authUserID stri
 
 	return &runnerLocationProfile{
 		AuthUserID:  config.NormalizeString(row["auth_user_id"]),
+		RunnerTier:  config.NormalizeString(row["runner_tier"]),
 		Province:    config.NormalizeString(row["province"]),
 		City:        config.NormalizeString(row["city"]),
 		District:    config.NormalizeString(row["district"]),
@@ -185,6 +192,9 @@ func mapQuestRecord(row map[string]any) questRecord {
 		Status:             config.NormalizeString(row["status"]),
 		RewardAmount:       config.NormalizeString(row["reward_amount"]),
 		RewardCurrency:     config.NormalizeString(row["reward_currency"]),
+		QuestTier:          config.NormalizeString(row["quest_tier"]),
+		TierScore:          config.NormalizeString(row["tier_score"]),
+		TierStatus:         config.NormalizeString(row["tier_status"]),
 		Province:           config.NormalizeString(row["province"]),
 		City:               config.NormalizeString(row["city"]),
 		District:           config.NormalizeString(row["district"]),

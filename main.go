@@ -11,6 +11,7 @@ import (
 	giverquest "Stream-StrictMode/routes/giver-quest"
 	"Stream-StrictMode/routes/login"
 	"Stream-StrictMode/routes/logout"
+	"Stream-StrictMode/routes/performance"
 	"Stream-StrictMode/routes/profile"
 	"Stream-StrictMode/routes/quest"
 	"Stream-StrictMode/routes/rating"
@@ -54,6 +55,8 @@ func main() {
 	disputeHandler := dispute.Dispute(disputeService)
 	ratingService := rating.NewService(client, appConfig)
 	ratingHandler := rating.Rating(ratingService)
+	performanceService := performance.NewService(client, appConfig)
+	performanceHandler := performance.Performance(performanceService)
 	runnerQuestService := runnerquest.NewService(client, appConfig)
 	runnerQuestHandler := runnerquest.RunnerQuest(runnerQuestService)
 	verificationService := userverification.NewService(client, appConfig)
@@ -141,11 +144,21 @@ func main() {
 	api.Options("/disputes/:id/mediate", disputeHandler)
 	api.Post("/ratings", ratingHandler)
 	api.Options("/ratings", ratingHandler)
+	api.Get("/performance/summary", performanceHandler)
+	api.Get("/performance/ledger", performanceHandler)
+	api.Get("/performance/skills", performanceHandler)
+	api.Get("/performance/ratings", performanceHandler)
+	api.Options("/performance/summary", performanceHandler)
+	api.Options("/performance/ledger", performanceHandler)
+	api.Options("/performance/skills", performanceHandler)
+	api.Options("/performance/ratings", performanceHandler)
+	api.Get("/runner/tier-status", runnerQuestHandler)
 	api.Get("/runner/quests/active", runnerQuestHandler)
 	api.Get("/runner/quests/history", runnerQuestHandler)
 	api.Post("/runner/quests/:id/take", runnerQuestHandler)
 	api.Post("/runner/quests/:id/start", runnerQuestHandler)
 	api.Post("/runner/quests/:id/finish", runnerQuestHandler)
+	api.Options("/runner/tier-status", runnerQuestHandler)
 	api.Options("/runner/quests/active", runnerQuestHandler)
 	api.Options("/runner/quests/history", runnerQuestHandler)
 	api.Options("/runner/quests/:id/take", runnerQuestHandler)

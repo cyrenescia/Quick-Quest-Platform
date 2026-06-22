@@ -8,10 +8,14 @@ import (
 	"time"
 
 	"Stream-StrictMode/config"
+	questclassification "Stream-StrictMode/routes/quest-classification"
+	runnertier "Stream-StrictMode/routes/runner-tier"
 
 	"github.com/gofiber/fiber/v3"
 	"github.com/google/uuid"
 )
+
+const MinPPDelta = 5.0
 
 type ratingRequestPayload struct {
 	AssignmentID string
@@ -22,6 +26,24 @@ type ratingRequestPayload struct {
 type ratingPartyContext struct {
 	RaterRole       string
 	RateeAuthUserID string
+}
+
+type ppWeightedInput struct {
+	RatingScore  float64
+	QuestTier    string
+	RunnerTier   string
+	RewardAmount float64
+	FinishedAt   *time.Time
+}
+
+type ppWeightedResult struct {
+	PPDelta           float64
+	BasePP            float64
+	TierMultiplier    float64
+	ChallengeBonus    float64
+	ValueMultiplier   float64
+	TimeDecay         float64
+	MinPPFloorApplied bool
 }
 
 func Rating(service *Service) fiber.Handler {
@@ -89,7 +111,18 @@ func handleRatingPost(c fiber.Ctx, service *Service) error {
 
 	ratingID := uuid.NewString()
 	skillScope := resolveSkillScope(questRecord)
-	ppDelta := computePPDelta(payload.RatingScore)
+	runnerTier, err := service.FindRunnerTier(ctx, assignment.RunnerAuthUserID)
+	if err != nil {
+		return config.WriteError(c, config.MapSupabaseError(err, "Gagal mengambil tier runner untuk PP cloud."), "Gagal menyimpan rating.")
+	}
+	ppResult := computeWeightedPP(ppWeightedInput{
+		RatingScore:  payload.RatingScore,
+		QuestTier:    questRecord.QuestTier,
+		RunnerTier:   runnerTier,
+		RewardAmount: questRecord.RewardAmount,
+		FinishedAt:   assignment.FinishedAt,
+	})
+	ppDelta := ppResult.PPDelta
 	createPayload := createRatingPayload{
 		RatingID:        ratingID,
 		QuestID:         questRecord.ID,
@@ -101,9 +134,23 @@ func handleRatingPost(c fiber.Ctx, service *Service) error {
 		RatingNote:      payload.RatingNote,
 		SkillScope:      skillScope,
 		PPDelta:         ppDelta,
+		QuestTier:       questclassification.NormalizeTier(questRecord.QuestTier),
+		TierScore:       questRecord.TierScore,
+		RunnerTier:      questclassification.NormalizeTier(runnerTier),
+		RewardAmount:    questRecord.RewardAmount,
+		FinishedAt:      assignment.FinishedAt,
 	}
-	if err := service.CreateRatingWithPPLedger(ctx, createPayload); err != nil {
+	if err := service.CreateRatingWithPPLedger(ctx, createPayload, ppResult); err != nil {
 		return config.WriteError(c, config.MapSupabaseError(err, "Gagal menyimpan rating dan PP ledger cloud."), "Gagal menyimpan rating.")
+	}
+
+	var tierProgression *runnertier.ProgressionResult
+	var tierProgressionWarning string
+	if partyContext.RateeAuthUserID == assignment.RunnerAuthUserID {
+		tierProgression, err = service.ApplyRunnerRatingProgression(ctx, assignment.RunnerAuthUserID, ppDelta)
+		if err != nil {
+			tierProgressionWarning = strings.TrimSpace(err.Error())
+		}
 	}
 
 	ratingSummary, err := service.CountUniqueRatingsByAssignment(ctx, assignment.ID)
@@ -124,11 +171,14 @@ func handleRatingPost(c fiber.Ctx, service *Service) error {
 			"rating_score":        payload.RatingScore,
 			"skill_scope":         skillScope,
 			"pp_delta":            ppDelta,
+			"pp_breakdown":        toPPBreakdownPayload(ppResult),
 			"rating_count":        ratingSummary.RatingCount,
 			"unique_rating_count": ratingSummary.UniqueRatingCount,
 			"giver_rated":         ratingSummary.GiverRated,
 			"runner_rated":        ratingSummary.RunnerRated,
 			"both_rated":          ratingSummary.BothRated,
+			"tier_progression":    toRunnerTierProgressionPayload(tierProgression),
+			"tier_warning":        nullIfEmptyString(tierProgressionWarning),
 		},
 	})
 }
@@ -252,6 +302,133 @@ func ensureRatingLifecycleReady(ctx context.Context, service *Service, quest *qu
 	return nil
 }
 
-func computePPDelta(score float64) float64 {
-	return math.Round(score*20*100) / 100
+func computeWeightedPP(input ppWeightedInput) ppWeightedResult {
+	basePP := roundPP(input.RatingScore * 20)
+	tier := tierMultiplier(input.QuestTier)
+	bonus := challengeBonus(input.RunnerTier, input.QuestTier)
+	value := valueMultiplier(input.RewardAmount)
+	decay := timeDecayFactor(input.FinishedAt)
+	final := roundPP(basePP * tier * bonus * value * decay)
+	floorApplied := false
+	if final < MinPPDelta {
+		final = MinPPDelta
+		floorApplied = true
+	}
+
+	return ppWeightedResult{
+		PPDelta:           final,
+		BasePP:            basePP,
+		TierMultiplier:    tier,
+		ChallengeBonus:    bonus,
+		ValueMultiplier:   value,
+		TimeDecay:         decay,
+		MinPPFloorApplied: floorApplied,
+	}
+}
+
+func tierMultiplier(questTier string) float64 {
+	switch questclassification.NormalizeTier(questTier) {
+	case questclassification.TierQ3:
+		return 2.5
+	case questclassification.TierQ2:
+		return 1.5
+	default:
+		return 1.0
+	}
+}
+
+func challengeBonus(runnerTier string, questTier string) float64 {
+	runnerRank := questclassification.TierRank(runnerTier)
+	questRank := questclassification.TierRank(questTier)
+	diff := questRank - runnerRank
+
+	switch {
+	case diff >= 2:
+		return 1.5
+	case diff == 1:
+		return 1.2
+	case diff == 0:
+		return 1.0
+	default:
+		return 0.6
+	}
+}
+
+func valueMultiplier(rewardAmount float64) float64 {
+	switch {
+	case rewardAmount >= 5000000:
+		return 1.5
+	case rewardAmount >= 2000000:
+		return 1.3
+	case rewardAmount >= 500000:
+		return 1.1
+	case rewardAmount >= 100000:
+		return 1.0
+	default:
+		return 0.8
+	}
+}
+
+func timeDecayFactor(finishedAt *time.Time) float64 {
+	if finishedAt == nil || finishedAt.IsZero() {
+		return 1.0
+	}
+
+	elapsed := time.Since(finishedAt.UTC())
+	if elapsed < 0 {
+		return 1.0
+	}
+	daysSince := elapsed.Hours() / 24
+	switch {
+	case daysSince <= 3:
+		return 1.0
+	case daysSince <= 7:
+		return 0.97
+	case daysSince <= 14:
+		return 0.93
+	case daysSince <= 30:
+		return 0.88
+	default:
+		return 0.80
+	}
+}
+
+func roundPP(value float64) float64 {
+	return math.Round(value*100) / 100
+}
+
+func toPPBreakdownPayload(record ppWeightedResult) fiber.Map {
+	return fiber.Map{
+		"base_pp":              record.BasePP,
+		"tier_multiplier":      record.TierMultiplier,
+		"challenge_bonus":      record.ChallengeBonus,
+		"value_multiplier":     record.ValueMultiplier,
+		"time_decay":           record.TimeDecay,
+		"pp_delta_final":       record.PPDelta,
+		"min_pp_floor_applied": record.MinPPFloorApplied,
+	}
+}
+
+func toRunnerTierProgressionPayload(record *runnertier.ProgressionResult) any {
+	if record == nil {
+		return nil
+	}
+
+	return fiber.Map{
+		"auth_user_id":     record.AuthUserID,
+		"previous_tier":    record.PreviousTier,
+		"current_tier":     record.CurrentTier,
+		"tier_changed":     record.TierChanged,
+		"pp_delta_applied": record.PPDeltaApplied,
+		"progression_note": record.ProgressionNote,
+		"status":           record.Status,
+	}
+}
+
+func nullIfEmptyString(value string) any {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
+		return nil
+	}
+	return trimmed
 }

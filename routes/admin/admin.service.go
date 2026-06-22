@@ -102,9 +102,10 @@ type verificationDecisionPayload struct {
 }
 
 type adminQuestRecord struct {
-	ID     string
-	Title  string
-	Status string
+	ID        string
+	Title     string
+	Status    string
+	QuestTier string
 }
 
 type adminAssignmentRecord struct {
@@ -183,6 +184,12 @@ type adminAutoReleaseResult struct {
 	AutoReleaseAt *time.Time
 	Released      bool
 	SkippedReason string
+}
+
+type adminUserPerformanceRecord struct {
+	AuthUserID      string
+	RunnerPP        float64
+	RunnerRiskScore int
 }
 
 func NewService(client *config.SupabaseClient, cfg config.AppConfig) *Service {
@@ -268,7 +275,7 @@ func (s *Service) FindDisputeCaseByID(ctx context.Context, disputeID string) (*a
 }
 
 func (s *Service) FindQuestByID(ctx context.Context, questID string) (*adminQuestRecord, error) {
-	row, err := s.client.SelectFirst(ctx, "quests", "id,title,status", map[string]string{
+	row, err := s.client.SelectFirst(ctx, "quests", "id,title,status,quest_tier", map[string]string{
 		"id": questID,
 	})
 	if err != nil {
@@ -278,9 +285,10 @@ func (s *Service) FindQuestByID(ctx context.Context, questID string) (*adminQues
 		return nil, nil
 	}
 	return &adminQuestRecord{
-		ID:     config.NormalizeString(row["id"]),
-		Title:  config.NormalizeString(row["title"]),
-		Status: config.NormalizeString(row["status"]),
+		ID:        config.NormalizeString(row["id"]),
+		Title:     config.NormalizeString(row["title"]),
+		Status:    config.NormalizeString(row["status"]),
+		QuestTier: config.NormalizeString(row["quest_tier"]),
 	}, nil
 }
 
@@ -600,6 +608,118 @@ func (s *Service) CreateDisputeEvent(ctx context.Context, disputeID string, acto
 		"created_at":  now,
 		"updated_at":  now,
 	})
+}
+
+func (s *Service) FindUserPerformanceProfile(ctx context.Context, authUserID string) (*adminUserPerformanceRecord, error) {
+	row, err := s.client.SelectFirst(
+		ctx,
+		"user_identification",
+		"auth_user_id,runner_pp,runner_risk_score",
+		map[string]string{"auth_user_id": authUserID},
+	)
+	if err != nil {
+		return nil, err
+	}
+	if row == nil {
+		return nil, nil
+	}
+
+	return &adminUserPerformanceRecord{
+		AuthUserID:      config.NormalizeString(row["auth_user_id"]),
+		RunnerPP:        parseFloatOrZero(config.NormalizeString(row["runner_pp"])),
+		RunnerRiskScore: int(parseFloatOrZero(config.NormalizeString(row["runner_risk_score"]))),
+	}, nil
+}
+
+// InsertPPPenaltyLedger keeps the profile PP and ledger aligned. Supabase REST
+// has no transaction primitive here, so a failed profile update compensates by
+// deleting the ledger row that was just inserted.
+func (s *Service) InsertPPPenaltyLedger(
+	ctx context.Context,
+	authUserID string,
+	disputeID string,
+	questID string,
+	assignmentID string,
+	questTier string,
+	requestedPPDelta float64,
+) (float64, error) {
+	profile, err := s.FindUserPerformanceProfile(ctx, authUserID)
+	if err != nil {
+		return 0, err
+	}
+	if profile == nil || profile.RunnerPP <= 0 || requestedPPDelta >= 0 {
+		return 0, nil
+	}
+
+	actualPenalty := resolveAppliedPPPenalty(profile.RunnerPP, requestedPPDelta)
+	if actualPenalty == 0 {
+		return 0, nil
+	}
+
+	ledgerID := uuid.NewString()
+	now := time.Now().UTC()
+	if err := s.client.Insert(ctx, "performance_point_ledger", map[string]any{
+		"id":            ledgerID,
+		"auth_user_id":  authUserID,
+		"quest_id":      nullIfEmpty(questID),
+		"assignment_id": nullIfEmpty(assignmentID),
+		"source_type":   "penalty",
+		"skill_scope":   "dispute",
+		"pp_delta":      actualPenalty,
+		"reason":        "Penalty PP dari keputusan mediasi dispute.",
+		"metadata": map[string]any{
+			"dispute_id":         disputeID,
+			"quest_tier":         normalizeAdminQuestTier(questTier),
+			"requested_pp_delta": requestedPPDelta,
+			"applied_pp_delta":   actualPenalty,
+		},
+		"created_at": now,
+	}); err != nil {
+		return 0, err
+	}
+
+	nextPP := resolveNextRunnerPP(profile.RunnerPP, actualPenalty)
+	if err := s.client.Update(ctx, "user_identification", map[string]string{
+		"auth_user_id": authUserID,
+	}, map[string]any{
+		"runner_pp":  nextPP,
+		"updated_at": now,
+	}); err != nil {
+		_ = s.client.Delete(ctx, "performance_point_ledger", map[string]string{"id": ledgerID})
+		return 0, err
+	}
+
+	return actualPenalty, nil
+}
+
+func (s *Service) IncrementUserRiskScore(ctx context.Context, authUserID string, increment int) (int, error) {
+	if strings.TrimSpace(authUserID) == "" || increment <= 0 {
+		return 0, nil
+	}
+
+	profile, err := s.FindUserPerformanceProfile(ctx, authUserID)
+	if err != nil {
+		return 0, err
+	}
+	if profile == nil {
+		return 0, nil
+	}
+
+	nextRisk, appliedIncrement := resolveNextRiskScore(profile.RunnerRiskScore, increment)
+	if appliedIncrement == 0 {
+		return 0, nil
+	}
+
+	if err := s.client.Update(ctx, "user_identification", map[string]string{
+		"auth_user_id": authUserID,
+	}, map[string]any{
+		"runner_risk_score": nextRisk,
+		"updated_at":        time.Now().UTC(),
+	}); err != nil {
+		return 0, err
+	}
+
+	return appliedIncrement, nil
 }
 
 func mapAdminDisputeCaseRecord(row map[string]any) adminDisputeCaseRecord {

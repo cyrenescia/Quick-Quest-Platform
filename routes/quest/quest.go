@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"Stream-StrictMode/config"
+	questclassification "Stream-StrictMode/routes/quest-classification"
 
 	"github.com/gofiber/fiber/v3"
 )
@@ -21,12 +22,21 @@ const (
 
 type questMatchingContext struct {
 	RunnerAuthUserID string
+	RunnerTier       string
 	RunnerLat        *float64
 	RunnerLng        *float64
 	Province         string
 	City             string
 	District         string
 	SubDistrict      string
+}
+
+type questTierAccessMeta struct {
+	RunnerTier string
+	QuestTier  string
+	TierScore  int
+	Accessible bool
+	Reason     string
 }
 
 type questMatchMeta struct {
@@ -75,6 +85,11 @@ func handleQuestGet(c fiber.Ctx, service *Service) error {
 
 	items := make([]fiber.Map, 0, len(quests))
 	for _, record := range quests {
+		tierAccess := evaluateQuestTierAccess(record, matchContext)
+		if !tierAccess.Accessible {
+			continue
+		}
+
 		matchMeta := evaluateQuestMatch(record, matchContext)
 		if !matchMeta.Matched {
 			continue
@@ -84,7 +99,7 @@ func handleQuestGet(c fiber.Ctx, service *Service) error {
 		if err != nil {
 			return config.WriteError(c, config.MapSupabaseError(err, "Gagal mengambil ringkasan giver cloud."), "Gagal mengambil quest.")
 		}
-		items = append(items, toQuestListItem(record, giver, matchMeta))
+		items = append(items, toQuestListItem(record, giver, matchMeta, tierAccess))
 	}
 
 	return c.JSON(fiber.Map{
@@ -111,6 +126,7 @@ func handleQuestDetailGet(c fiber.Ctx, service *Service, ctx context.Context, qu
 		return config.WriteError(c, config.MapSupabaseError(err, "Gagal mengambil ringkasan giver cloud."), "Gagal mengambil detail quest.")
 	}
 
+	tierAccess := evaluateQuestTierAccess(*record, matchContext)
 	var matchMeta *questMatchMeta
 	if strings.TrimSpace(record.Status) == "open" {
 		matchMeta = evaluateQuestMatch(*record, matchContext)
@@ -119,7 +135,7 @@ func handleQuestDetailGet(c fiber.Ctx, service *Service, ctx context.Context, qu
 	return c.JSON(fiber.Map{
 		"success": true,
 		"message": "Detail quest berhasil diambil.",
-		"data":    toQuestDetailItem(*record, giver, matchMeta),
+		"data":    toQuestDetailItem(*record, giver, matchMeta, tierAccess),
 	})
 }
 
@@ -143,7 +159,7 @@ func resolveQuestContext(c fiber.Ctx, service *Service) (context.Context, contex
 	return ctx, cancel, authRecord, nil
 }
 
-func toQuestListItem(record questRecord, giver *giverSummaryRecord, matchMeta *questMatchMeta) fiber.Map {
+func toQuestListItem(record questRecord, giver *giverSummaryRecord, matchMeta *questMatchMeta, tierAccess questTierAccessMeta) fiber.Map {
 	distanceValue := any(nil)
 	matchingPayload := fiber.Map{}
 	if matchMeta != nil {
@@ -171,9 +187,15 @@ func toQuestListItem(record questRecord, giver *giverSummaryRecord, matchMeta *q
 			record.RewardCurrency,
 			"IDR",
 		),
-		"reward_display": buildRewardDisplay(record.RewardAmount, record.RewardCurrency),
-		"distance_km":    distanceValue,
-		"matching":       matchingPayload,
+		"reward_display":       buildRewardDisplay(record.RewardAmount, record.RewardCurrency),
+		"quest_tier":           tierAccess.QuestTier,
+		"tier_score":           tierAccess.TierScore,
+		"tier_status":          firstNonEmpty(record.TierStatus, questclassification.StatusAutoClassified),
+		"runner_tier":          tierAccess.RunnerTier,
+		"is_accessible":        tierAccess.Accessible,
+		"accessibility_reason": tierAccess.Reason,
+		"distance_km":          distanceValue,
+		"matching":             matchingPayload,
 		"giver": fiber.Map{
 			"auth_user_id": record.GiverAuthUserID,
 			"fullname":     resolveDisplayName(giver),
@@ -201,8 +223,8 @@ func toQuestListItem(record questRecord, giver *giverSummaryRecord, matchMeta *q
 	}
 }
 
-func toQuestDetailItem(record questRecord, giver *giverSummaryRecord, matchMeta *questMatchMeta) fiber.Map {
-	item := toQuestListItem(record, giver, matchMeta)
+func toQuestDetailItem(record questRecord, giver *giverSummaryRecord, matchMeta *questMatchMeta, tierAccess questTierAccessMeta) fiber.Map {
+	item := toQuestListItem(record, giver, matchMeta, tierAccess)
 	item["description"] = record.Description
 	return item
 }
@@ -210,6 +232,7 @@ func toQuestDetailItem(record questRecord, giver *giverSummaryRecord, matchMeta 
 func buildQuestMatchingContext(c fiber.Ctx, service *Service, ctx context.Context, authRecord *authSessionRecord) (*questMatchingContext, error) {
 	matchContext := &questMatchingContext{
 		RunnerAuthUserID: authRecord.AuthUserID,
+		RunnerTier:       questclassification.TierQ1,
 	}
 
 	if runnerLat := strings.TrimSpace(c.Query("runner_lat")); runnerLat != "" {
@@ -233,6 +256,7 @@ func buildQuestMatchingContext(c fiber.Ctx, service *Service, ctx context.Contex
 		return nil, config.MapSupabaseError(err, "Gagal mengambil profil lokasi runner cloud.")
 	}
 	if locationProfile != nil {
+		matchContext.RunnerTier = questclassification.NormalizeTier(locationProfile.RunnerTier)
 		matchContext.Province = locationProfile.Province
 		matchContext.City = locationProfile.City
 		matchContext.District = locationProfile.District
@@ -240,6 +264,30 @@ func buildQuestMatchingContext(c fiber.Ctx, service *Service, ctx context.Contex
 	}
 
 	return matchContext, nil
+}
+
+func evaluateQuestTierAccess(record questRecord, matchContext *questMatchingContext) questTierAccessMeta {
+	runnerTier := questclassification.TierQ1
+	if matchContext != nil {
+		runnerTier = questclassification.NormalizeTier(matchContext.RunnerTier)
+	}
+
+	questTier := questclassification.NormalizeTier(record.QuestTier)
+	tierScore := parseOptionalIntValue(record.TierScore)
+	accessible := questclassification.CanRunnerAccessQuestTier(runnerTier, questTier)
+	reason := questclassification.BuildTierAccessReason(runnerTier, questTier, accessible)
+	if strings.EqualFold(strings.TrimSpace(record.TierStatus), questclassification.StatusPendingReview) {
+		accessible = false
+		reason = "Quest menunggu review admin Q-Tier sebelum bisa diakses Runner."
+	}
+
+	return questTierAccessMeta{
+		RunnerTier: runnerTier,
+		QuestTier:  questTier,
+		TierScore:  tierScore,
+		Accessible: accessible,
+		Reason:     reason,
+	}
 }
 
 func evaluateQuestMatch(record questRecord, matchContext *questMatchingContext) *questMatchMeta {
@@ -428,6 +476,18 @@ func parseOptionalInt(value string) any {
 	parsed, err := strconv.Atoi(trimmed)
 	if err != nil {
 		return nil
+	}
+	return parsed
+}
+
+func parseOptionalIntValue(value string) int {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
+		return 0
+	}
+	parsed, err := strconv.Atoi(trimmed)
+	if err != nil {
+		return 0
 	}
 	return parsed
 }

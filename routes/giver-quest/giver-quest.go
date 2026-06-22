@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"Stream-StrictMode/config"
+	questclassification "Stream-StrictMode/routes/quest-classification"
 
 	"github.com/gofiber/fiber/v3"
 )
@@ -229,6 +230,9 @@ func handleGiverQuestPost(c fiber.Ctx, service *Service) error {
 		if questRecord.Status != "draft" {
 			return config.WriteError(c, config.NewAppError("Quest hanya bisa dipublish dari status draft.", fiber.StatusConflict), "Gagal publish quest giver.")
 		}
+		if requiresTierReview(questRecord) {
+			return config.WriteError(c, config.NewAppError("Quest masih pending review Q-Tier. Admin harus verifikasi tier sebelum quest bisa dibroadcast.", fiber.StatusConflict), "Gagal publish quest giver.")
+		}
 
 		escrow, err := service.FindQuestEscrowByQuestID(ctx, questID)
 		if err != nil {
@@ -251,6 +255,8 @@ func handleGiverQuestPost(c fiber.Ctx, service *Service) error {
 			"data": fiber.Map{
 				"quest_id":      questID,
 				"quest_status":  "open",
+				"quest_tier":    firstNonEmpty(questRecord.QuestTier, questclassification.TierQ1),
+				"tier_status":   firstNonEmpty(questRecord.TierStatus, questclassification.StatusAutoClassified),
 				"escrow_status": "locked",
 			},
 		})
@@ -392,20 +398,22 @@ func resolveGiverQuestContext(c fiber.Ctx, service *Service, enforceUnlocked boo
 
 func collectCreateQuestRequest(body map[string]any) (createQuestPayload, error) {
 	payload := createQuestPayload{
-		Title:          config.NormalizeString(body["title"]),
-		Description:    config.NormalizeString(body["description"]),
-		Category:       config.NormalizeString(body["category"]),
-		SkillTags:      collectStringArray(body["skill_tags"]),
-		Mode:           normalizeQuestMode(config.NormalizeString(body["mode"])),
-		Status:         normalizeQuestStatus(config.NormalizeString(body["status"])),
-		RewardCurrency: firstNonEmpty(config.NormalizeString(body["reward_currency"]), "IDR"),
-		Province:       config.NormalizeString(body["province"]),
-		City:           config.NormalizeString(body["city"]),
-		District:       config.NormalizeString(body["district"]),
-		SubDistrict:    config.NormalizeString(body["sub_district"]),
-		FullAddress:    config.NormalizeString(body["full_address"]),
-		PostalCode:     config.NormalizeString(body["postal_code"]),
-		MaxRunner:      parseOrDefaultInt(config.NormalizeString(body["max_runner"]), 1),
+		Title:              config.NormalizeString(body["title"]),
+		Description:        config.NormalizeString(body["description"]),
+		Category:           config.NormalizeString(body["category"]),
+		SkillTags:          collectStringArray(body["skill_tags"]),
+		Mode:               normalizeQuestMode(config.NormalizeString(body["mode"])),
+		Status:             normalizeQuestStatus(config.NormalizeString(body["status"])),
+		RewardCurrency:     firstNonEmpty(config.NormalizeString(body["reward_currency"]), "IDR"),
+		ReqEducationDetail: config.NormalizeString(body["req_education_detail"]),
+		ReqDocuments:       collectStringArray(body["req_documents"]),
+		Province:           config.NormalizeString(body["province"]),
+		City:               config.NormalizeString(body["city"]),
+		District:           config.NormalizeString(body["district"]),
+		SubDistrict:        config.NormalizeString(body["sub_district"]),
+		FullAddress:        config.NormalizeString(body["full_address"]),
+		PostalCode:         config.NormalizeString(body["postal_code"]),
+		MaxRunner:          parseOrDefaultInt(config.NormalizeString(body["max_runner"]), 1),
 	}
 
 	if payload.Title == "" {
@@ -420,6 +428,29 @@ func collectCreateQuestRequest(body map[string]any) (createQuestPayload, error) 
 		return createQuestPayload{}, config.NewAppError("Reward amount wajib berupa angka valid.", fiber.StatusBadRequest)
 	}
 	payload.RewardAmount = rewardAmount
+
+	durationDays, err := parseOptionalNonNegativeInt(body["contract_duration_days"], "Durasi kontrak")
+	if err != nil {
+		return createQuestPayload{}, err
+	}
+	payload.ContractDurationDays = durationDays
+
+	payload.ContractType, err = normalizeContractTypeStrict(config.NormalizeString(body["contract_type"]), durationDays)
+	if err != nil {
+		return createQuestPayload{}, err
+	}
+	payload.ReqEducation, err = normalizeRequirementLevelStrict(config.NormalizeString(body["req_education"]), "Syarat pendidikan")
+	if err != nil {
+		return createQuestPayload{}, err
+	}
+	payload.ReqPortfolio, err = normalizeRequirementLevelStrict(config.NormalizeString(body["req_portfolio"]), "Syarat portfolio")
+	if err != nil {
+		return createQuestPayload{}, err
+	}
+	payload.ReqIdentityLevel, err = normalizeIdentityLevelStrict(config.NormalizeString(body["req_identity_level"]))
+	if err != nil {
+		return createQuestPayload{}, err
+	}
 
 	if payload.PostalCode != "" && !postalCodePattern.MatchString(payload.PostalCode) {
 		return createQuestPayload{}, config.NewAppError("Postal code quest harus 5 digit.", fiber.StatusBadRequest)
@@ -548,6 +579,13 @@ func isGiverHistoryQuest(record *questRecord, escrow *escrowRecord, ratingState 
 	return false
 }
 
+func requiresTierReview(record *questRecord) bool {
+	if record == nil {
+		return false
+	}
+	return strings.EqualFold(strings.TrimSpace(record.TierStatus), questclassification.StatusPendingReview)
+}
+
 func toGiverQuestPayload(record *questRecord, escrow *escrowRecord, ratingState *questRatingStateRecord) fiber.Map {
 	if record == nil {
 		return fiber.Map{}
@@ -572,36 +610,49 @@ func toGiverQuestPayload(record *questRecord, escrow *escrowRecord, ratingState 
 	}
 
 	return fiber.Map{
-		"id":                   record.ID,
-		"quest_id":             record.ID,
-		"title":                record.Title,
-		"description":          record.Description,
-		"category":             record.Category,
-		"skill_tags":           record.SkillTags,
-		"mode":                 record.Mode,
-		"status":               record.Status,
-		"reward_amount":        record.RewardAmount,
-		"reward_currency":      firstNonEmpty(record.RewardCurrency, "IDR"),
-		"reward_display":       buildRewardDisplay(record.RewardAmount, record.RewardCurrency),
-		"current_runner_count": currentRunnerCount,
-		"max_runner":           maxRunner,
-		"province":             record.Province,
-		"city":                 record.City,
-		"district":             record.District,
-		"sub_district":         record.SubDistrict,
-		"full_address":         record.FullAddress,
-		"postal_code":          record.PostalCode,
-		"lat":                  parseOptionalFloat(record.Lat),
-		"lng":                  parseOptionalFloat(record.Lng),
-		"location":             location,
-		"capacity":             capacity,
-		"starts_at":            optionalTimeValue(record.StartsAt),
-		"ends_at":              optionalTimeValue(record.EndsAt),
-		"published_at":         optionalTimeValue(record.PublishedAt),
-		"created_at":           optionalTimeValue(record.CreatedAt),
-		"updated_at":           optionalTimeValue(record.UpdatedAt),
-		"escrow":               toQuestEscrowPayload(escrow),
-		"rating_state":         toQuestRatingStatePayload(ratingState),
+		"id":                     record.ID,
+		"quest_id":               record.ID,
+		"title":                  record.Title,
+		"description":            record.Description,
+		"category":               record.Category,
+		"skill_tags":             record.SkillTags,
+		"mode":                   record.Mode,
+		"status":                 record.Status,
+		"reward_amount":          record.RewardAmount,
+		"reward_currency":        firstNonEmpty(record.RewardCurrency, "IDR"),
+		"reward_display":         buildRewardDisplay(record.RewardAmount, record.RewardCurrency),
+		"contract_type":          firstNonEmpty(record.ContractType, questclassification.ContractOneOff),
+		"contract_duration_days": parseOptionalInt(record.ContractDurationDays),
+		"req_education":          firstNonEmpty(record.ReqEducation, questclassification.ReqNone),
+		"req_education_detail":   record.ReqEducationDetail,
+		"req_portfolio":          firstNonEmpty(record.ReqPortfolio, questclassification.ReqNone),
+		"req_identity_level":     firstNonEmpty(record.ReqIdentityLevel, questclassification.IdentityBasic),
+		"req_documents":          record.ReqDocuments,
+		"quest_tier":             firstNonEmpty(record.QuestTier, questclassification.TierQ1),
+		"tier_score":             parseOptionalInt(record.TierScore),
+		"tier_status":            firstNonEmpty(record.TierStatus, questclassification.StatusAutoClassified),
+		"tier_classified_at":     optionalTimeValue(record.TierClassifiedAt),
+		"tier_verified_by":       record.TierVerifiedBy,
+		"tier_override_note":     record.TierOverrideNote,
+		"current_runner_count":   currentRunnerCount,
+		"max_runner":             maxRunner,
+		"province":               record.Province,
+		"city":                   record.City,
+		"district":               record.District,
+		"sub_district":           record.SubDistrict,
+		"full_address":           record.FullAddress,
+		"postal_code":            record.PostalCode,
+		"lat":                    parseOptionalFloat(record.Lat),
+		"lng":                    parseOptionalFloat(record.Lng),
+		"location":               location,
+		"capacity":               capacity,
+		"starts_at":              optionalTimeValue(record.StartsAt),
+		"ends_at":                optionalTimeValue(record.EndsAt),
+		"published_at":           optionalTimeValue(record.PublishedAt),
+		"created_at":             optionalTimeValue(record.CreatedAt),
+		"updated_at":             optionalTimeValue(record.UpdatedAt),
+		"escrow":                 toQuestEscrowPayload(escrow),
+		"rating_state":           toQuestRatingStatePayload(ratingState),
 	}
 }
 
@@ -655,6 +706,42 @@ func normalizeQuestStatus(value string) string {
 	default:
 		return "draft"
 	}
+}
+
+func normalizeContractTypeStrict(value string, durationDays *int) (string, error) {
+	normalized := questclassification.NormalizeContractType(value, durationDays)
+	if normalized == "" {
+		return "", config.NewAppError("Contract type harus one_off, fixed_term, atau long_term.", fiber.StatusBadRequest)
+	}
+	return normalized, nil
+}
+
+func normalizeRequirementLevelStrict(value string, label string) (string, error) {
+	normalized := questclassification.NormalizeRequirementLevel(value)
+	if normalized == "" {
+		return "", config.NewAppError(label+" harus none, preferred, atau required.", fiber.StatusBadRequest)
+	}
+	return normalized, nil
+}
+
+func normalizeIdentityLevelStrict(value string) (string, error) {
+	normalized := questclassification.NormalizeIdentityLevel(value)
+	if normalized == "" {
+		return "", config.NewAppError("Syarat identitas harus basic, ktp, atau full_docs.", fiber.StatusBadRequest)
+	}
+	return normalized, nil
+}
+
+func parseOptionalNonNegativeInt(value any, label string) (*int, error) {
+	trimmed := strings.TrimSpace(config.NormalizeString(value))
+	if trimmed == "" {
+		return nil, nil
+	}
+	parsed, err := strconv.Atoi(trimmed)
+	if err != nil || parsed < 0 {
+		return nil, config.NewAppError(label+" harus berupa angka non-negatif.", fiber.StatusBadRequest)
+	}
+	return &parsed, nil
 }
 
 func parseOrDefaultInt(value string, defaultValue int) int {
