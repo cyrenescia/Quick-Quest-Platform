@@ -1,5 +1,5 @@
-import { createContext, useContext, useState, type ReactNode } from "react";
-import type { RoleInitPayload } from "./home/role.service";
+import { createContext, useCallback, useContext, useEffect, useState, type ReactNode } from "react";
+import type { RoleInitPayload, RoleInitResponse } from "./home/role.service";
 import GlobalEndpoint, { clearAccessToken, requestJson } from "./global.service";
 
 const AUTH_PROFILE_STORAGE_KEY = "qqm-auth-profile";
@@ -35,6 +35,19 @@ function persistAuthProfile(profile: RoleInitPayload | null): void {
   window.sessionStorage.setItem(AUTH_PROFILE_STORAGE_KEY, JSON.stringify(profile));
 }
 
+async function fetchAuthenticatedProfile(): Promise<RoleInitPayload> {
+  const response = await requestJson<RoleInitResponse>(GlobalEndpoint().profile.detail, {
+    method: "GET",
+    credentials: "include",
+  });
+
+  if (!response.success || !response.data) {
+    throw new Error(response.message || "Session profile tidak valid dari backend.");
+  }
+
+  return response.data;
+}
+
 interface AuthContextType {
   isAuthenticated: boolean;
   isAuthReady: boolean;
@@ -49,14 +62,33 @@ const AuthContext = createContext<AuthContextType | undefined>(undefined);
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [userProfile, setUserProfile] = useState<RoleInitPayload | null>(() => readPersistedAuthProfile());
   const [isAuthenticated, setIsAuthenticated] = useState(() => Boolean(readPersistedAuthProfile()));
-  const [isAuthReady, setIsAuthReady] = useState(true);
+  const [isAuthReady, setIsAuthReady] = useState(false);
 
-  const refreshSession = async () => {
-    const persisted = readPersistedAuthProfile();
-    setUserProfile(persisted);
-    setIsAuthenticated(Boolean(persisted));
-    setIsAuthReady(true);
-  };
+  const clearAuthState = useCallback(() => {
+    persistAuthProfile(null);
+    clearAccessToken();
+    setUserProfile(null);
+    setIsAuthenticated(false);
+  }, []);
+
+  const refreshSession = useCallback(async () => {
+    setIsAuthReady(false);
+
+    try {
+      const profile = await fetchAuthenticatedProfile();
+      persistAuthProfile(profile);
+      setUserProfile(profile);
+      setIsAuthenticated(true);
+    } catch {
+      clearAuthState();
+    } finally {
+      setIsAuthReady(true);
+    }
+  }, [clearAuthState]);
+
+  useEffect(() => {
+    void refreshSession();
+  }, [refreshSession]);
 
   const setAuthenticatedProfile = (profile: RoleInitPayload) => {
     persistAuthProfile(profile);
@@ -71,10 +103,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     } catch {
       // Silent error. Even if backend fails, force clean local state.
     }
-    persistAuthProfile(null);
-    clearAccessToken();
-    setUserProfile(null);
-    setIsAuthenticated(false);
+    clearAuthState();
     setIsAuthReady(true);
   };
 
